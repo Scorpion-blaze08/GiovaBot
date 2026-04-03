@@ -1,0 +1,30 @@
+{
+  "16209290481885@lid": {
+    "first_command": {
+      "unlockedAt": 1775141934428,
+      "date": "02/04/2026"
+    },
+    "slot_first_win": {
+      "unlockedAt": 1775141934567,
+      "date": "02/04/2026"
+    },
+    "dado_first_roll": {
+      "unlockedAt": 1775141943289,
+      "date": "02/04/2026"
+    }
+  },
+  "248885486293156@lid": {
+    "first_command": {
+      "unlockedAt": 1775142193523,
+      "date": "02/04/2026"
+    },
+    "slot_first_win": {
+      "unlockedAt": 1775142193774,
+      "date": "02/04/2026"
+    },
+    "slot_streak_5": {
+      "unlockedAt": 1775142215990,
+      "date": "02/04/2026"
+    }
+  }
+}

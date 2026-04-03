@@ -1,0 +1,22 @@
+{
+  "Damy": {
+    "punti": 71,
+    "vittorie": 2,
+    "partite": 23
+  },
+  "Antonino": {
+    "punti": 32,
+    "vittorie": 2,
+    "partite": 6
+  },
+  "Guarnaccia": {
+    "punti": 41,
+    "vittorie": 0,
+    "partite": 17
+  },
+  "Gio": {
+    "punti": 1,
+    "vittorie": 0,
+    "partite": 1
+  }
+}

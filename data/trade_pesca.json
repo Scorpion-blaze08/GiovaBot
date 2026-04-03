@@ -1,0 +1,30 @@
+{
+  "393276613342@c.us_1757342934211": {
+    "mittente": "393276613342@c.us",
+    "nomeMittente": "Gio",
+    "destinatario": "393515290448@c.us",
+    "nomeDestinatario": "Damy",
+    "pesce": {
+      "id": 13,
+      "nome": "Anguilla",
+      "emoji": "🐍",
+      "prezzo": 8,
+      "probabilita": 3
+    },
+    "timestamp": 1757342934211
+  },
+  "393276613342@c.us_1757343028059": {
+    "mittente": "393276613342@c.us",
+    "nomeMittente": "Gio",
+    "destinatario": "393515290448@c.us",
+    "nomeDestinatario": "Damy",
+    "pesce": {
+      "id": 13,
+      "nome": "Anguilla",
+      "emoji": "🐍",
+      "prezzo": 8,
+      "probabilita": 3
+    },
+    "timestamp": 1757343028059
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "393515290448@c.us": {
+    "sfidante": "393515290448@c.us",
+    "sfidato": "393276613342@c.us",
+    "stato": "attivo",
+    "hp_sfidante": 100,
+    "hp_sfidato": 57,
+    "turno": "393276613342@c.us",
+    "abilita_sfidante": 2,
+    "abilita_sfidato": 3,
+    "timestamp": 1757276784766
+  },
+  "393276613342@c.us": {
+    "sfidante": "393515290448@c.us",
+    "sfidato": "393276613342@c.us",
+    "stato": "attivo",
+    "hp_sfidante": 100,
+    "hp_sfidato": 100,
+    "turno": "393515290448@c.us",
+    "abilita_sfidante": 3,
+    "abilita_sfidato": 3,
+    "timestamp": 1757276784766
+  }
+}

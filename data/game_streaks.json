@@ -1,0 +1,22 @@
+{
+  "16209290481885@lid": {
+    "slot": {
+      "current": 1,
+      "best": 1
+    },
+    "dado": {
+      "current": 1,
+      "best": 1
+    },
+    "cavalli": {
+      "current": 0,
+      "best": 0
+    }
+  },
+  "248885486293156@lid": {
+    "slot": {
+      "current": 0,
+      "best": 6
+    }
+  }
+}
