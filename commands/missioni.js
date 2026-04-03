@@ -1,24 +1,40 @@
 const { getSenderId } = require('../utils/identity');
-const { getTodayMissionsForUser } = require('../utils/progression');
+const { getMissionBoardForUser } = require('../utils/progression');
+const { section, joinBlocks } = require('../utils/messageStyle');
+
+function renderMissionSection(blockTitle, block) {
+    const lines = [
+        `🗓️ Periodo: ${block.key}`,
+        `✨ Tema: ${block.headline}`,
+        ''
+    ];
+
+    for (const mission of block.missions) {
+        const status = mission.completed ? '✅' : '🕒';
+        const progress = Math.min(mission.progress, mission.target);
+        lines.push(`${status} ${mission.emoji} ${mission.title}`);
+        lines.push(`🎮 Gioco: ${mission.game} | 📈 Progresso: ${progress}/${mission.target} | 💰 Reward: ${mission.reward}`);
+        if (mission.flavor) lines.push(`🤖 ${mission.flavor}`);
+        lines.push('');
+    }
+
+    return section(blockTitle.toUpperCase(), lines).trim();
+}
 
 module.exports = {
     name: 'missioni',
-    description: 'Mostra le missioni giornaliere con ricompense',
+    description: 'Mostra le missioni giornaliere, mensili e stagionali con ricompense',
     async execute(msg) {
         const sender = await getSenderId(msg);
-        const daily = getTodayMissionsForUser(sender);
+        const board = await getMissionBoardForUser(sender);
 
-        const lines = ['🎯 MISSIONI GIORNALIERE 🎯', '', `Data: ${daily.date}`, ''];
+        const response = joinBlocks([
+            renderMissionSection('🎯 Missioni Giornaliere', board.daily),
+            renderMissionSection('📅 Missioni Mensili', board.monthly),
+            renderMissionSection('🌦️ Missioni Stagionali', board.seasonal),
+            '💡 Le ricompense vengono accreditate automaticamente appena completi la missione.'
+        ]);
 
-        for (const mission of daily.missions) {
-            const status = mission.completed ? '✅' : '🕒';
-            const progress = Math.min(mission.progress, mission.target);
-            lines.push(`${status} ${mission.emoji} ${mission.title}`);
-            lines.push(`Gioco: ${mission.game} | Progresso: ${progress}/${mission.target} | Ricompensa: ${mission.reward}`);
-            lines.push('');
-        }
-
-        lines.push('💡 Le ricompense vengono accreditate automaticamente appena completi la missione.');
-        await msg.reply(lines.join('\n').trim());
+        await msg.reply(response);
     }
 };

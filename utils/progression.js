@@ -1,7 +1,8 @@
-const fs = require('fs');
 const path = require('path');
 const { aggiungiMonete } = require('./economia');
 const { findMatchingKey } = require('./identity');
+const { readJson, writeJson } = require('./jsonStore');
+const { askGeminiJson, isAiConfigured } = require('./ai');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const PROGRESSION_FILE = path.join(DATA_DIR, 'progression.json');
@@ -29,7 +30,11 @@ const ACHIEVEMENTS = {
     pesca_rare_hunter: { name: 'Cacciatore Raro', emoji: '✨', category: '🎣 PESCA', reward: 80 },
     pesca_legendary: { name: 'Leggenda del Molo', emoji: '🐉', category: '🎣 PESCA', reward: 160 },
     pesca_boss_slayer: { name: 'Terrore degli Abissi', emoji: '👑', category: '🎣 PESCA', reward: 220 },
-    pesca_chef: { name: 'Chef del Porto', emoji: '🍽️', category: '🎣 PESCA', reward: 100 }
+    pesca_chef: { name: 'Chef del Porto', emoji: '🍽️', category: '🎣 PESCA', reward: 100 },
+    trivia_scholar: { name: 'Mente Brillante', emoji: '🧠', category: '📚 STUDIO', reward: 80 },
+    scelta_planner: { name: 'Decisionista', emoji: '📋', category: '📚 STUDIO', reward: 45 },
+    torneo_champion: { name: 'Campione del Torneo', emoji: '🏆', category: '🏟️ EVENTI', reward: 140 },
+    battaglia_warlord: { name: 'Condottiero', emoji: '🛡️', category: '🏟️ EVENTI', reward: 110 }
 };
 
 const DAILY_POOLS = {
@@ -42,48 +47,69 @@ const DAILY_POOLS = {
     casino: [
         { id: 'slot_runs', title: 'Leva Calda', emoji: '🎰', game: 'slot', metric: 'plays', target: 5, reward: 80 },
         { id: 'dice_runs', title: 'Tavolo dei Dadi', emoji: '🎲', game: 'dado', metric: 'plays', target: 4, reward: 75 },
-        { id: 'blackjack_wins', title: 'Banco Battuto', emoji: '🃏', game: 'blackjack', metric: 'wins', target: 2, reward: 110 }
-        ,
+        { id: 'blackjack_wins', title: 'Banco Battuto', emoji: '🃏', game: 'blackjack', metric: 'wins', target: 2, reward: 110 },
         { id: 'roulette_runs', title: 'Tavolo del Coraggio', emoji: '🔫', game: 'roulette', metric: 'plays', target: 2, reward: 120 }
     ],
     arena: [
         { id: 'horse_runs', title: 'Tribuna in Festa', emoji: '🐎', game: 'cavalli', metric: 'plays', target: 3, reward: 95 },
         { id: 'duel_win', title: 'Gloria nell Arena', emoji: '⚔️', game: 'duello', metric: 'wins', target: 1, reward: 150 }
     ],
+    school: [
+        { id: 'trivia_daily', title: 'Quiz Lampo', emoji: '🧠', game: 'trivia', metric: 'plays', target: 2, reward: 85 },
+        { id: 'choice_daily', title: 'Planner del Giorno', emoji: '📋', game: 'scelta', metric: 'plays', target: 2, reward: 50 }
+    ],
     general: [
         { id: 'profit_push', title: 'Cassa Positiva', emoji: '💰', game: 'all', metric: 'profit', target: 160, reward: 130 }
     ]
 };
 
-function readJson(filePath, fallback = {}) {
-    try {
-        if (!fs.existsSync(filePath)) return fallback;
-        return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    } catch {
-        return fallback;
-    }
-}
+const MONTHLY_POOLS = [
+    { id: 'monthly_profit', title: 'Tesoro del Mese', emoji: '💎', game: 'all', metric: 'profit', target: 1800, reward: 650 },
+    { id: 'monthly_pesca', title: 'Marinaio Instancabile', emoji: '🌊', game: 'pesca', metric: 'fishCaught', target: 45, reward: 500 },
+    { id: 'monthly_casino', title: 'Re della Sala', emoji: '🎰', game: 'slot', metric: 'plays', target: 25, reward: 420 },
+    { id: 'monthly_school', title: 'Mese da Secchione', emoji: '📚', game: 'trivia', metric: 'wins', target: 10, reward: 480 },
+    { id: 'monthly_combat', title: 'Arena in Fiamme', emoji: '⚔️', game: 'duello', metric: 'wins', target: 6, reward: 520 }
+];
 
-function writeJson(filePath, data) {
-    const dir = path.dirname(filePath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
-}
+const SEASONAL_POOLS = [
+    { id: 'season_legend', title: 'Leggenda di Stagione', emoji: '👑', game: 'all', metric: 'wins', target: 40, reward: 1400 },
+    { id: 'season_fishing', title: 'Dominatore degli Abissi', emoji: '🐉', game: 'pesca', metric: 'rareCaught', target: 18, reward: 1200 },
+    { id: 'season_school', title: 'Master del Ripasso', emoji: '🎓', game: 'trivia', metric: 'plays', target: 24, reward: 1000 },
+    { id: 'season_events', title: 'Signore degli Eventi', emoji: '🏟️', game: 'torneo', metric: 'wins', target: 4, reward: 1150 }
+];
 
 function getTodayKey() {
     return new Date().toISOString().slice(0, 10);
 }
 
-function seedFromDay(day) {
-    return day.split('-').reduce((sum, part) => sum + Number(part), 0);
+function getMonthKey() {
+    return new Date().toISOString().slice(0, 7);
+}
+
+function getSeasonKey(date = new Date()) {
+    const month = date.getUTCMonth() + 1;
+    const year = date.getUTCFullYear();
+    let season = 'winter';
+    if (month >= 3 && month <= 5) season = 'spring';
+    else if (month >= 6 && month <= 8) season = 'summer';
+    else if (month >= 9 && month <= 11) season = 'autumn';
+    return `${year}-${season}`;
+}
+
+function seedFromString(value) {
+    return value.split('').reduce((sum, char, index) => sum + (char.charCodeAt(0) * (index + 1)), 0);
 }
 
 function pickFromPool(pool, seed, offset) {
     return pool[(seed + offset) % pool.length];
 }
 
+function cloneMission(mission) {
+    return { ...mission };
+}
+
 function buildDailyMissions(day) {
-    const seed = seedFromDay(day);
+    const seed = seedFromString(day);
     const weekday = new Date(`${day}T12:00:00`).getDay();
     const isWeekend = weekday === 0 || weekday === 6;
 
@@ -91,6 +117,7 @@ function buildDailyMissions(day) {
         pickFromPool(DAILY_POOLS.pesca.filter(item => !item.weekendOnly), seed, 1),
         pickFromPool(DAILY_POOLS.casino, seed, 2),
         pickFromPool(DAILY_POOLS.arena, seed, 3),
+        pickFromPool(DAILY_POOLS.school, seed, 4),
         pickFromPool(DAILY_POOLS.general, seed, 0)
     ];
 
@@ -98,34 +125,171 @@ function buildDailyMissions(day) {
         missions.push(DAILY_POOLS.pesca.find(item => item.id === 'fish_boss'));
     }
 
-    return missions.map(mission => ({ ...mission }));
+    return missions.map(cloneMission);
 }
 
-function ensureProgressRecord(userId) {
-    const progression = readJson(PROGRESSION_FILE);
+function buildMonthlyMissions(monthKey) {
+    const seed = seedFromString(monthKey);
+    return [
+        pickFromPool(MONTHLY_POOLS, seed, 0),
+        pickFromPool(MONTHLY_POOLS, seed, 1),
+        pickFromPool(MONTHLY_POOLS, seed, 2)
+    ].map(cloneMission);
+}
+
+function buildSeasonalMissions(seasonKey) {
+    const seed = seedFromString(seasonKey);
+    return [
+        pickFromPool(SEASONAL_POOLS, seed, 0),
+        pickFromPool(SEASONAL_POOLS, seed, 1),
+        pickFromPool(SEASONAL_POOLS, seed, 2)
+    ].map(cloneMission);
+}
+
+function defaultAiPack(cycleName, cycleKey, missions) {
+    const cycleLabel = cycleName === 'daily' ? 'giornaliere' : cycleName === 'monthly' ? 'mensili' : 'stagionali';
+    const seasonLabel = cycleName === 'seasonal' ? ` | Stagione: ${cycleKey}` : '';
+
+    return {
+        source: 'fallback',
+        headline: `Missioni ${cycleLabel} pronte all'azione${seasonLabel}`,
+        descriptions: Object.fromEntries(
+            missions.map(mission => [
+                mission.id,
+                `${mission.emoji} Punta su ${mission.game} e chiudi l'obiettivo per incassare ${mission.reward} crediti.`
+            ])
+        )
+    };
+}
+
+async function generateAiPack(cycleName, cycleKey, missions) {
+    if (!isAiConfigured()) return defaultAiPack(cycleName, cycleKey, missions);
+
+    try {
+        const payload = await askGeminiJson([
+            'Genera un tema missioni per un bot WhatsApp scolastico/gaming.',
+            `Ciclo: ${cycleName}`,
+            `Chiave ciclo: ${cycleKey}`,
+            'Restituisci JSON con questa struttura:',
+            '{"headline":"...","descriptions":{"mission_id":"..."}}',
+            'Vincoli:',
+            '- italiano',
+            '- headline massimo 80 caratteri',
+            '- ogni descrizione massimo 120 caratteri',
+            '- tono energico, chiaro, utile in chat',
+            '- niente markdown',
+            '- usa solo mission_id esistenti',
+            '',
+            `Missioni: ${JSON.stringify(missions.map(mission => ({
+                id: mission.id,
+                title: mission.title,
+                game: mission.game,
+                target: mission.target,
+                reward: mission.reward
+            })))}`
+        ].join('\n'), {
+            temperature: 0.8,
+            maxOutputTokens: 320
+        });
+
+        const descriptions = {};
+        for (const mission of missions) {
+            const raw = payload?.descriptions?.[mission.id];
+            descriptions[mission.id] = typeof raw === 'string' && raw.trim()
+                ? raw.trim()
+                : `${mission.emoji} Completa ${mission.title.toLowerCase()} e prendi ${mission.reward} crediti.`;
+        }
+
+        return {
+            source: 'gemini',
+            headline: typeof payload?.headline === 'string' && payload.headline.trim()
+                ? payload.headline.trim()
+                : defaultAiPack(cycleName, cycleKey, missions).headline,
+            descriptions
+        };
+    } catch {
+        return defaultAiPack(cycleName, cycleKey, missions);
+    }
+}
+
+function normalizeMissionState(state) {
+    if (state && state.cycles) return state;
+
+    if (state && state.date && Array.isArray(state.missions)) {
+        return {
+            cycles: {
+                daily: {
+                    key: state.date,
+                    missions: state.missions,
+                    users: state.users || {},
+                    ai: null
+                }
+            }
+        };
+    }
+
+    return { cycles: {} };
+}
+
+async function ensureCycleState(cycleName, key, builder) {
+    const state = normalizeMissionState(readJson(MISSIONS_FILE, {}));
+    const cycles = state.cycles || {};
+    const current = cycles[cycleName];
+
+    if (!current || current.key !== key || !Array.isArray(current.missions)) {
+        cycles[cycleName] = {
+            key,
+            missions: builder(key),
+            users: {},
+            ai: null
+        };
+    } else {
+        if (!current.users || typeof current.users !== 'object') current.users = {};
+    }
+
+    const cycle = cycles[cycleName];
+    if (!cycle.ai || cycle.aiKey !== key) {
+        const ai = await generateAiPack(cycleName, key, cycle.missions);
+        cycle.ai = ai;
+        cycle.aiKey = key;
+    }
+
+    state.cycles = cycles;
+    writeJson(MISSIONS_FILE, state);
+    return { state, cycle };
+}
+
+function getCycleRecord(cycle, userId) {
+    const key = findMatchingKey(cycle.users, userId) || userId;
+    if (!cycle.users[key]) cycle.users[key] = { progress: {}, claimed: {} };
+    return { key, record: cycle.users[key] };
+}
+
+function updateProgressStats(userId, game, events) {
+    const progression = readJson(PROGRESSION_FILE, {});
     const key = findMatchingKey(progression, userId) || userId;
     if (!progression[key]) progression[key] = { total: { plays: 0, wins: 0, losses: 0, profit: 0 }, games: {} };
-    writeJson(PROGRESSION_FILE, progression);
-    return { data: progression, key, record: progression[key] };
-}
+    if (!progression[key].games[game]) progression[key].games[game] = {};
 
-function ensureMissionState() {
-    const state = readJson(MISSIONS_FILE, {});
-    const today = getTodayKey();
-    if (state.date !== today || !Array.isArray(state.missions)) {
-        const missions = buildDailyMissions(today);
-        const nextState = { date: today, missions, users: {} };
-        writeJson(MISSIONS_FILE, nextState);
-        return nextState;
+    const total = progression[key].total;
+    const gameStats = progression[key].games[game];
+
+    for (const [metric, value] of Object.entries(events)) {
+        if (typeof value !== 'number') continue;
+        if (['plays', 'wins', 'losses', 'profit'].includes(metric)) {
+            total[metric] = (total[metric] || 0) + value;
+        }
+        gameStats[metric] = (gameStats[metric] || 0) + value;
     }
-    if (!state.users || typeof state.users !== 'object') state.users = {};
-    return state;
+
+    writeJson(PROGRESSION_FILE, progression);
+    return progression[key];
 }
 
-function getMissionProgressRecord(state, userId) {
-    const key = findMatchingKey(state.users, userId) || userId;
-    if (!state.users[key]) state.users[key] = { progress: {}, claimed: {} };
-    return { key, record: state.users[key] };
+function getProgressForUser(userId) {
+    const progression = readJson(PROGRESSION_FILE, {});
+    const key = findMatchingKey(progression, userId);
+    return key ? progression[key] : { total: { plays: 0, wins: 0, losses: 0, profit: 0 }, games: {} };
 }
 
 function awardAchievement(userId, achievementId, displayName) {
@@ -159,65 +323,106 @@ function getAllAchievements() {
     return ACHIEVEMENTS;
 }
 
-function recordMissionProgress(userId, displayName, game, events) {
-    const state = ensureMissionState();
-    const { key, record } = getMissionProgressRecord(state, userId);
+async function recordMissionProgress(userId, displayName, game, events) {
+    const cycleDefinitions = [
+        { name: 'daily', key: getTodayKey(), builder: buildDailyMissions },
+        { name: 'monthly', key: getMonthKey(), builder: buildMonthlyMissions },
+        { name: 'seasonal', key: getSeasonKey(), builder: buildSeasonalMissions }
+    ];
+
     const notifications = [];
+    const state = normalizeMissionState(readJson(MISSIONS_FILE, {}));
 
-    for (const mission of state.missions) {
-        if (mission.game !== 'all' && mission.game !== game) continue;
+    for (const definition of cycleDefinitions) {
+        const existingCycle = state.cycles?.[definition.name];
+        let cycle = existingCycle;
 
-        const incrementRaw = Number(events[mission.metric] || 0);
-        const increment = mission.metric === 'profit' ? Math.max(0, incrementRaw) : incrementRaw;
-        if (increment <= 0) continue;
-
-        record.progress[mission.id] = (record.progress[mission.id] || 0) + increment;
-        if (!record.claimed[mission.id] && record.progress[mission.id] >= mission.target) {
-            record.claimed[mission.id] = true;
-            aggiungiMonete(userId, mission.reward, displayName);
-            notifications.push(`🎯 Missione completata: ${mission.emoji} ${mission.title}\n💰 Ricompensa: +${mission.reward} crediti`);
+        if (!cycle || cycle.key !== definition.key || !Array.isArray(cycle.missions)) {
+            cycle = {
+                key: definition.key,
+                missions: definition.builder(definition.key),
+                users: {},
+                ai: null,
+                aiKey: null
+            };
         }
+
+        if (!cycle.users || typeof cycle.users !== 'object') cycle.users = {};
+        const { key, record } = getCycleRecord(cycle, userId);
+
+        for (const mission of cycle.missions) {
+            if (mission.game !== 'all' && mission.game !== game) continue;
+
+            const incrementRaw = Number(events[mission.metric] || 0);
+            const increment = mission.metric === 'profit' ? Math.max(0, incrementRaw) : incrementRaw;
+            if (increment <= 0) continue;
+
+            record.progress[mission.id] = (record.progress[mission.id] || 0) + increment;
+            if (!record.claimed[mission.id] && record.progress[mission.id] >= mission.target) {
+                record.claimed[mission.id] = true;
+                aggiungiMonete(userId, mission.reward, displayName);
+                notifications.push(
+                    `${definition.name === 'daily' ? '🎯' : definition.name === 'monthly' ? '📅' : '🌦️'} Missione ${definition.name} completata: ${mission.emoji} ${mission.title}\n💰 Ricompensa: +${mission.reward} crediti`
+                );
+            }
+        }
+
+        cycle.users[key] = record;
+        state.cycles[definition.name] = cycle;
     }
 
-    state.users[key] = record;
     writeJson(MISSIONS_FILE, state);
     return notifications;
 }
 
-function updateProgressStats(userId, game, events) {
-    const progression = readJson(PROGRESSION_FILE, {});
-    const key = findMatchingKey(progression, userId) || userId;
-    if (!progression[key]) progression[key] = { total: { plays: 0, wins: 0, losses: 0, profit: 0 }, games: {} };
-    if (!progression[key].games[game]) progression[key].games[game] = {};
+async function getMissionBoardForUser(userId) {
+    const cycleDefinitions = [
+        { name: 'daily', label: 'Missioni Giornaliere', key: getTodayKey(), builder: buildDailyMissions },
+        { name: 'monthly', label: 'Missioni Mensili', key: getMonthKey(), builder: buildMonthlyMissions },
+        { name: 'seasonal', label: 'Missioni Stagionali', key: getSeasonKey(), builder: buildSeasonalMissions }
+    ];
 
-    const total = progression[key].total;
-    const gameStats = progression[key].games[game];
+    const board = {};
 
-    for (const [metric, value] of Object.entries(events)) {
-        if (typeof value !== 'number') continue;
-        if (['plays', 'wins', 'losses', 'profit'].includes(metric)) {
-            total[metric] = (total[metric] || 0) + value;
-        }
-        gameStats[metric] = (gameStats[metric] || 0) + value;
+    for (const definition of cycleDefinitions) {
+        const { cycle } = await ensureCycleState(definition.name, definition.key, definition.builder);
+        const userKey = findMatchingKey(cycle.users, userId);
+        const userRecord = userKey ? cycle.users[userKey] : { progress: {}, claimed: {} };
+        const ai = cycle.ai || defaultAiPack(definition.name, definition.key, cycle.missions);
+
+        board[definition.name] = {
+            key: cycle.key,
+            label: definition.label,
+            headline: ai.headline,
+            aiSource: ai.source,
+            missions: cycle.missions.map(mission => ({
+                ...mission,
+                flavor: ai.descriptions?.[mission.id] || '',
+                progress: userRecord.progress?.[mission.id] || 0,
+                completed: Boolean(userRecord.claimed?.[mission.id])
+            }))
+        };
     }
 
-    writeJson(PROGRESSION_FILE, progression);
-    return progression[key];
-}
-
-function getProgressForUser(userId) {
-    const progression = readJson(PROGRESSION_FILE, {});
-    const key = findMatchingKey(progression, userId);
-    return key ? progression[key] : { total: { plays: 0, wins: 0, losses: 0, profit: 0 }, games: {} };
+    return board;
 }
 
 function getTodayMissionsForUser(userId) {
-    const state = ensureMissionState();
-    const userKey = findMatchingKey(state.users, userId);
-    const userRecord = userKey ? state.users[userKey] : { progress: {}, claimed: {} };
+    const state = normalizeMissionState(readJson(MISSIONS_FILE, {}));
+    const daily = state.cycles?.daily;
+    const dailyKey = getTodayKey();
+    const cycle = daily && daily.key === dailyKey ? daily : {
+        key: dailyKey,
+        missions: buildDailyMissions(dailyKey),
+        users: {},
+        ai: defaultAiPack('daily', dailyKey, buildDailyMissions(dailyKey))
+    };
+    const userKey = findMatchingKey(cycle.users, userId);
+    const userRecord = userKey ? cycle.users[userKey] : { progress: {}, claimed: {} };
+
     return {
-        date: state.date,
-        missions: state.missions.map(mission => ({
+        date: cycle.key,
+        missions: cycle.missions.map(mission => ({
             ...mission,
             progress: userRecord.progress?.[mission.id] || 0,
             completed: Boolean(userRecord.claimed?.[mission.id])
@@ -227,7 +432,7 @@ function getTodayMissionsForUser(userId) {
 
 async function processGameProgress({ userId, game, displayName, msg, events = {}, flags = [], streak = 0 }) {
     updateProgressStats(userId, game, events);
-    const notifications = recordMissionProgress(userId, displayName, game, events);
+    const notifications = await recordMissionProgress(userId, displayName, game, events);
     const achievementsToCheck = new Set(flags);
     const stats = getProgressForUser(userId);
     const gameStats = stats.games[game] || {};
@@ -249,6 +454,10 @@ async function processGameProgress({ userId, game, displayName, msg, events = {}
     if (game === 'pesca' && (gameStats.legendaryCaught || 0) >= 1) achievementsToCheck.add('pesca_legendary');
     if (game === 'pesca' && (gameStats.bossWins || 0) >= 1) achievementsToCheck.add('pesca_boss_slayer');
     if (game === 'pesca' && (gameStats.crafted || 0) >= 1) achievementsToCheck.add('pesca_chef');
+    if (game === 'trivia' && (gameStats.wins || 0) >= 3) achievementsToCheck.add('trivia_scholar');
+    if (game === 'scelta' && (gameStats.plays || 0) >= 5) achievementsToCheck.add('scelta_planner');
+    if (game === 'torneo' && (gameStats.wins || 0) >= 1) achievementsToCheck.add('torneo_champion');
+    if (game === 'battaglia' && (gameStats.wins || 0) >= 3) achievementsToCheck.add('battaglia_warlord');
 
     for (const achievementId of achievementsToCheck) {
         const notification = awardAchievement(userId, achievementId, displayName);
@@ -264,6 +473,7 @@ module.exports = {
     getAchievementInfo,
     getAllAchievements,
     getTodayMissionsForUser,
+    getMissionBoardForUser,
     getProgressForUser,
     processGameProgress,
     awardAchievement

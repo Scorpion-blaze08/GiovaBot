@@ -30,8 +30,32 @@ function getDisplayName(userId, explicitName = null) {
     return explicitName || (matchedKey ? nomi[matchedKey] : null) || userId.split('@')[0];
 }
 
+function sanitizeEntry(rawEntry, fallbackId = '') {
+    if (!rawEntry || typeof rawEntry !== 'object') return null;
+
+    const rawId = typeof rawEntry.id === 'string' && rawEntry.id.trim()
+        ? rawEntry.id.trim()
+        : typeof fallbackId === 'string'
+            ? fallbackId.trim()
+            : '';
+
+    if (!rawId) return null;
+
+    return {
+        id: rawId,
+        nome: typeof rawEntry.nome === 'string' && rawEntry.nome.trim()
+            ? rawEntry.nome.trim()
+            : getDisplayName(rawId),
+        soldi: Number(rawEntry.soldi || 0),
+        vittorie: Number(rawEntry.vittorie || 0),
+        perdite: Number(rawEntry.perdite || 0)
+    };
+}
+
 function getOrderedStats(classifica) {
-    return Object.values(classifica)
+    return Object.entries(classifica)
+        .map(([key, entry]) => sanitizeEntry(entry, key))
+        .filter(Boolean)
         .sort((a, b) => {
             if ((b.soldi || 0) !== (a.soldi || 0)) return (b.soldi || 0) - (a.soldi || 0);
             if ((b.vittorie || 0) !== (a.vittorie || 0)) return (b.vittorie || 0) - (a.vittorie || 0);
@@ -46,7 +70,8 @@ function formatLeaderboard(title, entries) {
     for (let i = 0; i < entries.length; i++) {
         const entry = entries[i];
         const label = labels[i] || `${i + 1}.`;
-        response += `${label} @${entry.id.split('@')[0]} - Soldi: ${entry.soldi || 0}\n`;
+        const visibleName = entry.id.includes('@') ? `@${entry.id.split('@')[0]}` : entry.nome;
+        response += `${label} ${visibleName} - Soldi: ${entry.soldi || 0}\n`;
         response += `Vittorie: ${entry.vittorie || 0} | Perdite: ${entry.perdite || 0}\n\n`;
     }
     return response.trim();
@@ -127,11 +152,14 @@ async function mostraClassificaTotale(msg, client) {
 
     for (const gioco of GIOCHI) {
         const classifica = readJson(getClassificaFile(gioco));
-        for (const entry of Object.values(classifica)) {
+        for (const [key, rawEntry] of Object.entries(classifica)) {
+            const entry = sanitizeEntry(rawEntry, key);
+            if (!entry) continue;
+
             if (!totale[entry.id]) {
                 totale[entry.id] = {
                     id: entry.id,
-                    nome: entry.nome || entry.id.split('@')[0],
+                    nome: entry.nome || getDisplayName(entry.id),
                     soldi: 0,
                     vittorie: 0,
                     perdite: 0
@@ -152,7 +180,7 @@ async function mostraClassificaTotale(msg, client) {
     }
 
     await client.sendMessage(msg.from, formatLeaderboard('CLASSIFICA TOTALE', top), {
-        mentions: top.map(entry => entry.id)
+        mentions: top.map(entry => entry.id).filter(id => typeof id === 'string' && id.includes('@'))
     });
 }
 
@@ -166,6 +194,6 @@ async function mostraClassificaGioco(msg, client, gioco) {
     }
 
     await client.sendMessage(msg.from, formatLeaderboard(`CLASSIFICA ${gioco.toUpperCase()}`, top), {
-        mentions: top.map(entry => entry.id)
+        mentions: top.map(entry => entry.id).filter(id => typeof id === 'string' && id.includes('@'))
     });
 }

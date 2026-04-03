@@ -13,7 +13,8 @@ module.exports = {
                 'Usi rapidi:',
                 '• .ai dammi 3 idee per un evento del bot',
                 '• .ai scrivi un annuncio per il gruppo',
-                '• .ai inventa una missione giornaliera pesca',
+                '• .ai inventa un pacchetto missioni giornaliere, mensili e stagionali',
+                '• .ai suggerisci un miglioramento per roulette o pesca',
                 '• .ai spiegami bene il blackjack',
                 '',
                 `⚙️ Modello attuale: ${GEMINI_MODEL}`
