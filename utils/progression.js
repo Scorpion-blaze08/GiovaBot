@@ -146,70 +146,150 @@ function buildSeasonalMissions(seasonKey) {
     ].map(cloneMission);
 }
 
-function defaultAiPack(cycleName, cycleKey, missions) {
+function getCycleLabel(cycleName) {
+    if (cycleName === 'daily') return 'giornaliere';
+    if (cycleName === 'monthly') return 'mensili';
+    return 'stagionali';
+}
+
+function getMissionBounds(cycleName, mission) {
+    const targetFactor = cycleName === 'daily'
+        ? [0.75, 1.35]
+        : cycleName === 'monthly'
+            ? [0.8, 1.3]
+            : [0.85, 1.25];
+
+    const rewardFactor = cycleName === 'daily'
+        ? [0.8, 1.35]
+        : cycleName === 'monthly'
+            ? [0.85, 1.3]
+            : [0.9, 1.25];
+
+    const minTarget = Math.max(1, Math.floor(mission.target * targetFactor[0]));
+    const maxTarget = Math.max(minTarget, Math.ceil(mission.target * targetFactor[1]));
+    const minReward = Math.max(10, Math.floor(mission.reward * rewardFactor[0]));
+    const maxReward = Math.max(minReward, Math.ceil(mission.reward * rewardFactor[1]));
+
+    return { minTarget, maxTarget, minReward, maxReward };
+}
+
+function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+}
+
+function sanitizeGeneratedMission(baseMission, rawMission, cycleName, index) {
+    const bounds = getMissionBounds(cycleName, baseMission);
+    const rawTitle = typeof rawMission?.title === 'string' ? rawMission.title.trim() : '';
+    const rawFlavor = typeof rawMission?.flavor === 'string' ? rawMission.flavor.trim() : '';
+    const rawEmoji = typeof rawMission?.emoji === 'string' ? rawMission.emoji.trim() : '';
+
+    return {
+        ...baseMission,
+        id: `${baseMission.id}_${cycleName}_${index + 1}`,
+        title: rawTitle || baseMission.title,
+        emoji: rawEmoji || baseMission.emoji,
+        target: clamp(Number(rawMission?.target || baseMission.target), bounds.minTarget, bounds.maxTarget),
+        reward: clamp(Number(rawMission?.reward || baseMission.reward), bounds.minReward, bounds.maxReward),
+        flavor: rawFlavor || `${baseMission.emoji} Completa ${baseMission.title.toLowerCase()} e prendi ${baseMission.reward} crediti.`
+    };
+}
+
+function defaultCyclePack(cycleName, cycleKey, missions) {
     const cycleLabel = cycleName === 'daily' ? 'giornaliere' : cycleName === 'monthly' ? 'mensili' : 'stagionali';
     const seasonLabel = cycleName === 'seasonal' ? ` | Stagione: ${cycleKey}` : '';
+    const generatedMissions = missions.map((mission, index) => ({
+        ...mission,
+        id: `${mission.id}_${cycleName}_${index + 1}`,
+        flavor: `${mission.emoji} Punta su ${mission.game} e chiudi l'obiettivo per incassare ${mission.reward} crediti.`
+    }));
 
     return {
         source: 'fallback',
         headline: `Missioni ${cycleLabel} pronte all'azione${seasonLabel}`,
-        descriptions: Object.fromEntries(
-            missions.map(mission => [
-                mission.id,
-                `${mission.emoji} Punta su ${mission.game} e chiudi l'obiettivo per incassare ${mission.reward} crediti.`
-            ])
-        )
+        missions: generatedMissions
     };
 }
 
-async function generateAiPack(cycleName, cycleKey, missions) {
-    if (!isAiConfigured()) return defaultAiPack(cycleName, cycleKey, missions);
+async function generateAiMissionSet(cycleName, cycleKey, missions) {
+    if (!isAiConfigured()) return defaultCyclePack(cycleName, cycleKey, missions);
 
     try {
+        const payloadMissions = missions.map((mission, index) => {
+            const bounds = getMissionBounds(cycleName, mission);
+            return {
+                slot: index + 1,
+                baseId: mission.id,
+                currentTitle: mission.title,
+                emoji: mission.emoji,
+                game: mission.game,
+                metric: mission.metric,
+                minTarget: bounds.minTarget,
+                maxTarget: bounds.maxTarget,
+                minReward: bounds.minReward,
+                maxReward: bounds.maxReward
+            };
+        });
+
         const payload = await askGeminiJson([
-            'Genera un tema missioni per un bot WhatsApp scolastico/gaming.',
+            'Genera un pacchetto missioni per un bot WhatsApp scolastico/gaming.',
             `Ciclo: ${cycleName}`,
             `Chiave ciclo: ${cycleKey}`,
             'Restituisci JSON con questa struttura:',
-            '{"headline":"...","descriptions":{"mission_id":"..."}}',
+            '{"headline":"...","missions":[{"slot":1,"title":"...","emoji":"...","target":1,"reward":100,"flavor":"..."}]}',
             'Vincoli:',
             '- italiano',
             '- headline massimo 80 caratteri',
-            '- ogni descrizione massimo 120 caratteri',
+            '- esattamente una missione per ogni slot passato',
+            '- non cambiare gioco o metrica, cambia solo titolo/target/reward/flavor',
+            '- flavor massimo 120 caratteri',
             '- tono energico, chiaro, utile in chat',
             '- niente markdown',
-            '- usa solo mission_id esistenti',
+            '- target e reward devono rispettare i range indicati',
             '',
-            `Missioni: ${JSON.stringify(missions.map(mission => ({
-                id: mission.id,
-                title: mission.title,
-                game: mission.game,
-                target: mission.target,
-                reward: mission.reward
-            })))}`
+            `Template missioni: ${JSON.stringify(payloadMissions)}`
         ].join('\n'), {
             temperature: 0.8,
-            maxOutputTokens: 320
+            maxOutputTokens: 500
         });
 
-        const descriptions = {};
-        for (const mission of missions) {
-            const raw = payload?.descriptions?.[mission.id];
-            descriptions[mission.id] = typeof raw === 'string' && raw.trim()
-                ? raw.trim()
-                : `${mission.emoji} Completa ${mission.title.toLowerCase()} e prendi ${mission.reward} crediti.`;
-        }
+        const generated = Array.isArray(payload?.missions) ? payload.missions : [];
+        const aiMissions = missions.map((mission, index) => {
+            const rawMission = generated.find(item => Number(item?.slot) === index + 1);
+            return sanitizeGeneratedMission(mission, rawMission, cycleName, index);
+        });
 
         return {
             source: 'gemini',
             headline: typeof payload?.headline === 'string' && payload.headline.trim()
                 ? payload.headline.trim()
-                : defaultAiPack(cycleName, cycleKey, missions).headline,
-            descriptions
+                : defaultCyclePack(cycleName, cycleKey, missions).headline,
+            missions: aiMissions
         };
     } catch {
-        return defaultAiPack(cycleName, cycleKey, missions);
+        return defaultCyclePack(cycleName, cycleKey, missions);
     }
+}
+
+async function createCycleState(cycleName, key, builder) {
+    const baseMissions = builder(key);
+    const generatedPack = await generateAiMissionSet(cycleName, key, baseMissions);
+    const cycleLabel = getCycleLabel(cycleName);
+
+    return {
+        key,
+        missions: generatedPack.missions,
+        users: {},
+        ai: {
+            source: generatedPack.source,
+            headline: generatedPack.headline,
+            descriptions: Object.fromEntries(
+                generatedPack.missions.map(mission => [
+                    mission.id,
+                    mission.flavor || `${mission.emoji} Completa questa missione ${cycleLabel} e incassa ${mission.reward} crediti.`
+                ])
+            )
+        }
+    };
 }
 
 function normalizeMissionState(state) {
@@ -231,25 +311,37 @@ function normalizeMissionState(state) {
     return { cycles: {} };
 }
 
+function shouldRefreshCycle(cycleName, cycle, key) {
+    if (!cycle || cycle.key !== key || !Array.isArray(cycle.missions)) return true;
+
+    const expectedTag = `_${cycleName}_`;
+    return cycle.missions.some(mission => {
+        if (!mission || typeof mission !== 'object') return true;
+        if (typeof mission.id !== 'string' || !mission.id.includes(expectedTag)) return true;
+        return typeof mission.flavor !== 'string';
+    });
+}
+
 async function ensureCycleState(cycleName, key, builder) {
     const state = normalizeMissionState(readJson(MISSIONS_FILE, {}));
     const cycles = state.cycles || {};
     const current = cycles[cycleName];
 
-    if (!current || current.key !== key || !Array.isArray(current.missions)) {
-        cycles[cycleName] = {
-            key,
-            missions: builder(key),
-            users: {},
-            ai: null
-        };
+    if (shouldRefreshCycle(cycleName, current, key)) {
+        cycles[cycleName] = await createCycleState(cycleName, key, builder);
     } else {
         if (!current.users || typeof current.users !== 'object') current.users = {};
     }
 
     const cycle = cycles[cycleName];
     if (!cycle.ai || cycle.aiKey !== key) {
-        const ai = await generateAiPack(cycleName, key, cycle.missions);
+        const ai = {
+            source: cycle.ai?.source || 'cache',
+            headline: cycle.ai?.headline || defaultCyclePack(cycleName, key, cycle.missions).headline,
+            descriptions: cycle.ai?.descriptions || Object.fromEntries(
+                cycle.missions.map(mission => [mission.id, mission.flavor || ''])
+            )
+        };
         cycle.ai = ai;
         cycle.aiKey = key;
     }
@@ -337,14 +429,9 @@ async function recordMissionProgress(userId, displayName, game, events) {
         const existingCycle = state.cycles?.[definition.name];
         let cycle = existingCycle;
 
-        if (!cycle || cycle.key !== definition.key || !Array.isArray(cycle.missions)) {
-            cycle = {
-                key: definition.key,
-                missions: definition.builder(definition.key),
-                users: {},
-                ai: null,
-                aiKey: null
-            };
+        if (shouldRefreshCycle(definition.name, cycle, definition.key)) {
+            cycle = await createCycleState(definition.name, definition.key, definition.builder);
+            cycle.aiKey = definition.key;
         }
 
         if (!cycle.users || typeof cycle.users !== 'object') cycle.users = {};
@@ -388,7 +475,7 @@ async function getMissionBoardForUser(userId) {
         const { cycle } = await ensureCycleState(definition.name, definition.key, definition.builder);
         const userKey = findMatchingKey(cycle.users, userId);
         const userRecord = userKey ? cycle.users[userKey] : { progress: {}, claimed: {} };
-        const ai = cycle.ai || defaultAiPack(definition.name, definition.key, cycle.missions);
+        const ai = cycle.ai || defaultCyclePack(definition.name, definition.key, cycle.missions);
 
         board[definition.name] = {
             key: cycle.key,
@@ -413,9 +500,15 @@ function getTodayMissionsForUser(userId) {
     const dailyKey = getTodayKey();
     const cycle = daily && daily.key === dailyKey ? daily : {
         key: dailyKey,
-        missions: buildDailyMissions(dailyKey),
+        missions: defaultCyclePack('daily', dailyKey, buildDailyMissions(dailyKey)).missions,
         users: {},
-        ai: defaultAiPack('daily', dailyKey, buildDailyMissions(dailyKey))
+        ai: {
+            source: 'fallback',
+            headline: defaultCyclePack('daily', dailyKey, buildDailyMissions(dailyKey)).headline,
+            descriptions: Object.fromEntries(
+                defaultCyclePack('daily', dailyKey, buildDailyMissions(dailyKey)).missions.map(mission => [mission.id, mission.flavor])
+            )
+        }
     };
     const userKey = findMatchingKey(cycle.users, userId);
     const userRecord = userKey ? cycle.users[userKey] : { progress: {}, claimed: {} };
