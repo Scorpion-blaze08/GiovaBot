@@ -1,316 +1,284 @@
-const { aggiornaClassifica } = require('./classifica');
-const fs = require('fs');
 const path = require('path');
+const { getSenderId, isAdmin } = require('../utils/identity');
+const { getNomeCache } = require('../utils/nomi');
+const { aggiungiMonete } = require('../utils/economia');
+const { aggiornaClassifica } = require('./classifica');
+const { processGameProgress } = require('../utils/progression');
+const { readJson, writeJson } = require('../utils/jsonStore');
+
+const FILE = path.join(__dirname, '..', 'data', 'tornei.json');
+
+function getPlayerName(userId) {
+    return getNomeCache(userId) || userId.split('@')[0];
+}
+
+function getActiveTournament(tournaments) {
+    return Object.values(tournaments).find(item => item.state !== 'finished') || null;
+}
+
+function createBracket(players) {
+    const shuffled = [...players].sort(() => Math.random() - 0.5);
+    const matches = [];
+    for (let i = 0; i < shuffled.length; i += 2) {
+        if (i + 1 < shuffled.length) {
+            matches.push({
+                player1: shuffled[i],
+                player2: shuffled[i + 1],
+                winner: null
+            });
+        } else {
+            matches.push({
+                player1: shuffled[i],
+                player2: null,
+                winner: shuffled[i]
+            });
+        }
+    }
+    return matches;
+}
 
 module.exports = {
     name: 'torneo',
-    description: 'Sistema tornei multiplayer',
+    description: 'Torneo a eliminazione rapida',
     async execute(msg) {
-        const args = msg.body.split(' ').slice(1);
-        const sender = msg.author || msg.from;
-        const torneiFile = path.join(__dirname, '..', 'data', 'tornei.json');
-        const adminIds = ['16209290481885@lid'];
-        
-        function caricaTornei() {
-            try {
-                if (!fs.existsSync(torneiFile)) return {};
-                return JSON.parse(fs.readFileSync(torneiFile, 'utf8'));
-            } catch (e) {
-                return {};
-            }
+        const args = msg.body.trim().split(/\s+/).slice(1);
+        const sender = await getSenderId(msg);
+        const tournaments = readJson(FILE, {});
+        const active = getActiveTournament(tournaments);
+
+        if (!args.length) {
+            await msg.reply([
+                '🏆 TORNEO - GUIDA',
+                '',
+                '• .torneo crea [nome] (admin)',
+                '• .torneo partecipa',
+                '• .torneo lista',
+                '• .torneo inizia (admin)',
+                '• .torneo combatti',
+                '• .torneo stato',
+                '• .torneo abbandona'
+            ].join('\n'));
+            return;
         }
-        
-        function salvaTornei(data) {
-            const dataDir = path.dirname(torneiFile);
-            if (!fs.existsSync(dataDir)) {
-                fs.mkdirSync(dataDir, { recursive: true });
-            }
-            fs.writeFileSync(torneiFile, JSON.stringify(data, null, 2));
-        }
-        
-        const tornei = caricaTornei();
-        
-        if (!args[0]) {
-            return msg.reply('🏆 SISTEMA TORNEI 🏆\n\n' +
-                '• .torneo crea [nome] - Crea torneo (admin)\n' +
-                '• .torneo partecipa - Unisciti al torneo\n' +
-                '• .torneo lista - Vedi tornei attivi\n' +
-                '• .torneo stato - Stato torneo corrente\n' +
-                '• .torneo inizia - Inizia torneo (admin)\n' +
-                '• .torneo combatti - Combatti nel turno\n' +
-                '• .torneo abbandona - Abbandona torneo');
-        }
-        
+
         if (args[0] === 'crea') {
-            if (!adminIds.includes(sender)) {
-                return msg.reply('❌ Solo gli admin possono creare tornei!');
+            if (!isAdmin(sender)) {
+                await msg.reply('❌ Solo gli admin possono creare un torneo.');
+                return;
             }
-            
-            const nome = args.slice(1).join(' ');
-            if (!nome) {
-                return msg.reply('❌ Specifica il nome del torneo!');
+            if (active) {
+                await msg.reply('⛔ C’è già un torneo non concluso.');
+                return;
             }
-            
-            if (Object.values(tornei).some(t => t.stato !== 'finito')) {
-                return msg.reply('❌ C\'è già un torneo attivo!');
+            const name = args.slice(1).join(' ').trim();
+            if (!name) {
+                await msg.reply('❌ Uso: .torneo crea [nome]');
+                return;
             }
-            
-            const torneoId = Date.now().toString();
-            tornei[torneoId] = {
-                id: torneoId,
-                nome: nome,
-                creatore: sender,
-                partecipanti: [],
-                stato: 'iscrizioni',
-                turno: 1,
-                scontri: [],
-                vincitore: null,
-                timestamp: Date.now()
+            const id = Date.now().toString();
+            tournaments[id] = {
+                id,
+                name,
+                createdBy: sender,
+                participants: [],
+                state: 'signup',
+                round: 0,
+                matches: [],
+                champion: null
             };
-            
-            salvaTornei(tornei);
-            
-            return msg.reply(`🏆 TORNEO CREATO! 🏆\n\n` +
-                `📋 Nome: ${nome}\n` +
-                `👥 Partecipanti: 0/21\n` +
-                `📝 Usa .torneo partecipa per iscriverti!\n` +
-                `⏰ Iscrizioni aperte per 10 minuti`);
+            writeJson(FILE, tournaments);
+            await msg.reply(`🏆 Torneo creato: ${name}\n\n📝 Le iscrizioni sono aperte. Usa .torneo partecipa`);
+            return;
         }
-        
+
         if (args[0] === 'partecipa') {
-            const torneo = Object.values(tornei).find(t => t.stato === 'iscrizioni');
-            if (!torneo) {
-                return msg.reply('❌ Nessun torneo con iscrizioni aperte!');
+            if (!active || active.state !== 'signup') {
+                await msg.reply('❌ Nessun torneo con iscrizioni aperte.');
+                return;
             }
-            
-            if (torneo.partecipanti.includes(sender)) {
-                return msg.reply('❌ Sei già iscritto al torneo!');
+            if (active.participants.includes(sender)) {
+                await msg.reply('❌ Sei già iscritto a questo torneo.');
+                return;
             }
-            
-            if (torneo.partecipanti.length >= 21) {
-                return msg.reply('❌ Torneo pieno! (21/21)');
-            }
-            
-            torneo.partecipanti.push(sender);
-            salvaTornei(tornei);
-            
-            return msg.reply(`✅ Iscritto al torneo "${torneo.nome}"!\n\n` +
-                `👥 Partecipanti: ${torneo.partecipanti.length}/21\n` +
-                `${torneo.partecipanti.length >= 4 ? '🟢 Minimo raggiunto!' : '🔴 Servono almeno 4 partecipanti'}`);
+            active.participants.push(sender);
+            tournaments[active.id] = active;
+            writeJson(FILE, tournaments);
+            await msg.reply(`✅ Iscrizione confermata a "${active.name}".\n\n👥 Partecipanti: ${active.participants.length}`);
+            return;
         }
-        
+
         if (args[0] === 'lista') {
-            const torneiAttivi = Object.values(tornei).filter(t => t.stato !== 'finito');
-            if (!torneiAttivi.length) {
-                return msg.reply('❌ Nessun torneo attivo!');
+            if (!active) {
+                await msg.reply('📭 Nessun torneo attivo al momento.');
+                return;
             }
-            
-            let message = '🏆 TORNEI ATTIVI 🏆\n\n';
-            torneiAttivi.forEach(t => {
-                message += `📋 ${t.nome}\n`;
-                message += `📊 Stato: ${t.stato}\n`;
-                message += `👥 Partecipanti: ${t.partecipanti.length}\n`;
-                if (t.stato === 'attivo') {
-                    message += `🎯 Turno: ${t.turno}\n`;
-                }
-                message += '\n';
-            });
-            
-            return msg.reply(message);
+            await msg.reply([
+                '🏆 TORNEO ATTIVO',
+                '',
+                `📋 Nome: ${active.name}`,
+                `📊 Stato: ${active.state}`,
+                `👥 Partecipanti: ${active.participants.length}`,
+                active.state === 'active' ? `🎯 Round: ${active.round}` : '📝 In attesa di inizio'
+            ].join('\n'));
+            return;
         }
-        
+
         if (args[0] === 'inizia') {
-            if (!adminIds.includes(sender)) {
-                return msg.reply('❌ Solo gli admin possono iniziare tornei!');
+            if (!isAdmin(sender)) {
+                await msg.reply('❌ Solo gli admin possono avviare il torneo.');
+                return;
             }
-            
-            const torneo = Object.values(tornei).find(t => t.stato === 'iscrizioni');
-            if (!torneo) {
-                return msg.reply('❌ Nessun torneo in fase di iscrizione!');
+            if (!active || active.state !== 'signup') {
+                await msg.reply('❌ Nessun torneo pronto da avviare.');
+                return;
             }
-            
-            if (torneo.partecipanti.length < 4) {
-                return msg.reply('❌ Servono almeno 4 partecipanti!');
+            if (active.participants.length < 4) {
+                await msg.reply('❌ Servono almeno 4 partecipanti.');
+                return;
             }
-            
-            // Mescola partecipanti
-            const partecipanti = [...torneo.partecipanti].sort(() => Math.random() - 0.5);
-            
-            // Crea scontri primo turno
-            torneo.scontri = [];
-            for (let i = 0; i < partecipanti.length; i += 2) {
-                if (i + 1 < partecipanti.length) {
-                    torneo.scontri.push({
-                        giocatore1: partecipanti[i],
-                        giocatore2: partecipanti[i + 1],
-                        vincitore: null,
-                        hp1: 100,
-                        hp2: 100,
-                        turnoScontro: partecipanti[i]
-                    });
-                } else {
-                    // Bye automatico per numero dispari
-                    torneo.scontri.push({
-                        giocatore1: partecipanti[i],
-                        giocatore2: null,
-                        vincitore: partecipanti[i],
-                        hp1: 100,
-                        hp2: 0,
-                        turnoScontro: null
-                    });
-                }
-            }
-            
-            torneo.stato = 'attivo';
-            salvaTornei(tornei);
-            
-            let message = `🏆 TORNEO INIZIATO! 🏆\n\n`;
-            message += `📋 ${torneo.nome}\n`;
-            message += `🎯 Turno ${torneo.turno}\n\n`;
-            message += `⚔️ SCONTRI:\n`;
-            torneo.scontri.forEach((s, i) => {
-                message += `${i + 1}. Giocatore vs Giocatore\n`;
-            });
-            message += `\nUsa .torneo combatti per combattere!`;
-            
-            return msg.reply(message);
+            active.state = 'active';
+            active.round = 1;
+            active.matches = createBracket(active.participants);
+            tournaments[active.id] = active;
+            writeJson(FILE, tournaments);
+            await msg.reply(`🚀 Torneo "${active.name}" iniziato!\n\n🎯 Round 1 pronto. Usa .torneo stato`);
+            return;
         }
-        
-        if (args[0] === 'combatti') {
-            const torneo = Object.values(tornei).find(t => t.stato === 'attivo');
-            if (!torneo) {
-                return msg.reply('❌ Nessun torneo attivo!');
-            }
-            
-            const mioScontro = torneo.scontri.find(s => 
-                (s.giocatore1 === sender || s.giocatore2 === sender) && !s.vincitore
-            );
-            
-            if (!mioScontro) {
-                return msg.reply('❌ Non hai scontri attivi!');
-            }
-            
-            if (mioScontro.turnoScontro !== sender) {
-                return msg.reply('❌ Non è il tuo turno nello scontro!');
-            }
-            
-            const sonoGiocatore1 = mioScontro.giocatore1 === sender;
-            const mioHp = sonoGiocatore1 ? 'hp1' : 'hp2';
-            const avversarioHp = sonoGiocatore1 ? 'hp2' : 'hp1';
-            const avversario = sonoGiocatore1 ? mioScontro.giocatore2 : mioScontro.giocatore1;
-            
-            const danno = Math.floor(Math.random() * 30) + 20; // 20-50 danno
-            mioScontro[avversarioHp] = Math.max(0, mioScontro[avversarioHp] - danno);
-            mioScontro.turnoScontro = avversario;
-            
-            let message = `⚔️ ATTACCO TORNEO! ⚔️\n\n`;
-            message += `💥 Hai inflitto ${danno} danni!\n`;
-            message += `💚 HP: ${mioScontro[mioHp]} vs ${mioScontro[avversarioHp]}`;
-            
-            if (mioScontro[avversarioHp] <= 0) {
-                mioScontro.vincitore = sender;
-                message += '\n\n🏆 HAI VINTO LO SCONTRO! 🏆';
-                
-                // Controlla se il turno è finito
-                const scontriFiniti = torneo.scontri.filter(s => s.vincitore).length;
-                if (scontriFiniti === torneo.scontri.length) {
-                    const vincitori = torneo.scontri.map(s => s.vincitore);
-                    
-                    if (vincitori.length === 1) {
-                        // Torneo finito
-                        torneo.vincitore = vincitori[0];
-                        torneo.stato = 'finito';
-                        message += `\n\n🎉 TORNEO VINTO! 🎉`;
-                        aggiornaClassifica(sender, 50, true, 'torneo');
-                    } else {
-                        // Prossimo turno
-                        torneo.turno++;
-                        torneo.scontri = [];
-                        
-                        for (let i = 0; i < vincitori.length; i += 2) {
-                            if (i + 1 < vincitori.length) {
-                                torneo.scontri.push({
-                                    giocatore1: vincitori[i],
-                                    giocatore2: vincitori[i + 1],
-                                    vincitore: null,
-                                    hp1: 100,
-                                    hp2: 100,
-                                    turnoScontro: vincitori[i]
-                                });
-                            }
-                        }
-                        
-                        message += `\n\n🎯 TURNO ${torneo.turno} INIZIATO!`;
-                    }
-                }
-                
-                aggiornaClassifica(sender, 10, true, 'torneo');
-            }
-            
-            salvaTornei(tornei);
-            return msg.reply(message);
-        }
-        
+
         if (args[0] === 'stato') {
-            const torneo = Object.values(tornei).find(t => t.stato !== 'finito');
-            if (!torneo) {
-                return msg.reply('❌ Nessun torneo attivo!');
+            if (!active) {
+                await msg.reply('📭 Nessun torneo attivo.');
+                return;
             }
-            
-            let message = `🏆 STATO TORNEO 🏆\n\n`;
-            message += `📋 Nome: ${torneo.nome}\n`;
-            message += `📊 Stato: ${torneo.stato}\n`;
-            
-            if (torneo.stato === 'iscrizioni') {
-                message += `👥 Partecipanti: ${torneo.partecipanti.length}/21\n`;
-            } else if (torneo.stato === 'attivo') {
-                message += `🎯 Turno: ${torneo.turno}\n`;
-                message += `⚔️ Scontri attivi: ${torneo.scontri.filter(s => !s.vincitore).length}\n`;
-                
-                const mioScontro = torneo.scontri.find(s => 
-                    (s.giocatore1 === sender || s.giocatore2 === sender) && !s.vincitore
-                );
-                
-                if (mioScontro) {
-                    const sonoGiocatore1 = mioScontro.giocatore1 === sender;
-                    const mioHp = sonoGiocatore1 ? mioScontro.hp1 : mioScontro.hp2;
-                    const avversarioHp = sonoGiocatore1 ? mioScontro.hp2 : mioScontro.hp1;
-                    
-                    message += `\n💚 I tuoi HP: ${mioHp}/100\n`;
-                    message += `💚 HP avversario: ${avversarioHp}/100\n`;
-                    message += `🎯 Turno: ${mioScontro.turnoScontro === sender ? 'TUO' : 'AVVERSARIO'}`;
-                }
+            const lines = [
+                '🏆 STATO TORNEO',
+                '',
+                `📋 Nome: ${active.name}`,
+                `📊 Stato: ${active.state}`,
+                `🎯 Round: ${active.round || 0}`,
+                ''
+            ];
+            if (active.matches?.length) {
+                lines.push('⚔️ Match del round:');
+                active.matches.forEach((match, index) => {
+                    lines.push(`${index + 1}. ${getPlayerName(match.player1)} vs ${match.player2 ? getPlayerName(match.player2) : 'BYE'}${match.winner ? ` → ${getPlayerName(match.winner)}` : ''}`);
+                });
             }
-            
-            return msg.reply(message);
+            await msg.reply(lines.join('\n'));
+            return;
         }
-        
-        if (args[0] === 'abbandona') {
-            const torneo = Object.values(tornei).find(t => 
-                t.partecipanti.includes(sender) && t.stato !== 'finito'
-            );
-            
-            if (!torneo) {
-                return msg.reply('❌ Non sei in nessun torneo!');
+
+        if (args[0] === 'combatti') {
+            if (!active || active.state !== 'active') {
+                await msg.reply('❌ Nessun torneo attivo in corso.');
+                return;
             }
-            
-            if (torneo.stato === 'iscrizioni') {
-                torneo.partecipanti = torneo.partecipanti.filter(p => p !== sender);
-            } else {
-                const mioScontro = torneo.scontri.find(s => 
-                    (s.giocatore1 === sender || s.giocatore2 === sender) && !s.vincitore
-                );
-                
-                if (mioScontro) {
-                    const avversario = mioScontro.giocatore1 === sender ? 
-                        mioScontro.giocatore2 : mioScontro.giocatore1;
-                    mioScontro.vincitore = avversario;
-                    aggiornaClassifica(avversario, 5, true, 'torneo');
+            const match = active.matches.find(item => !item.winner && (item.player1 === sender || item.player2 === sender));
+            if (!match) {
+                await msg.reply('❌ Non hai nessun match aperto in questo round.');
+                return;
+            }
+
+            const opponent = match.player1 === sender ? match.player2 : match.player1;
+            const power = Math.floor(Math.random() * 100) + 1;
+            const opponentPower = Math.floor(Math.random() * 100) + 1;
+            const winner = power >= opponentPower ? sender : opponent;
+            const loser = winner === sender ? opponent : sender;
+            match.winner = winner;
+
+            if (winner === sender) {
+                aggiornaClassifica(sender, 35, true, 'torneo', getPlayerName(sender));
+                aggiungiMonete(sender, 35, getPlayerName(sender));
+                await processGameProgress({
+                    userId: sender,
+                    game: 'torneo',
+                    displayName: getPlayerName(sender),
+                    msg,
+                    events: { plays: 1, wins: 1, profit: 35 }
+                });
+                if (loser) {
+                    aggiornaClassifica(loser, -10, false, 'torneo', getPlayerName(loser));
+                    aggiungiMonete(loser, -10, getPlayerName(loser));
+                    await processGameProgress({
+                        userId: loser,
+                        game: 'torneo',
+                        displayName: getPlayerName(loser),
+                        events: { plays: 1, losses: 1, profit: -10 }
+                    });
                 }
             }
-            
-            salvaTornei(tornei);
-            return msg.reply('🏃♂️ Hai abbandonato il torneo!');
+
+            if (active.matches.every(item => item.winner)) {
+                const winners = active.matches.map(item => item.winner).filter(Boolean);
+                if (winners.length === 1) {
+                    active.state = 'finished';
+                    active.champion = winners[0];
+                    aggiornaClassifica(winners[0], 120, true, 'torneo', getPlayerName(winners[0]));
+                    aggiungiMonete(winners[0], 120, getPlayerName(winners[0]));
+                    await processGameProgress({
+                        userId: winners[0],
+                        game: 'torneo',
+                        displayName: getPlayerName(winners[0]),
+                        msg,
+                        events: { wins: 1, profit: 120 }
+                    });
+                    tournaments[active.id] = active;
+                    writeJson(FILE, tournaments);
+                    await msg.reply(`👑 TORNEO CONCLUSO!\n\n🏆 Campione: ${getPlayerName(winners[0])}\n💰 Premio finale: +120 crediti`);
+                    return;
+                }
+
+                active.round += 1;
+                active.matches = createBracket(winners);
+            }
+
+            tournaments[active.id] = active;
+            writeJson(FILE, tournaments);
+            await msg.reply([
+                '⚔️ SCONTRO TORNEO',
+                '',
+                `🎲 Tuo punteggio: ${power}`,
+                `🎲 Punteggio avversario: ${opponentPower}`,
+                `🏆 Vincitore match: ${getPlayerName(winner)}`,
+                '',
+                active.state === 'active' ? `🎯 Round attuale: ${active.round}` : '🏁 Torneo concluso'
+            ].join('\n'));
+            return;
+        }
+
+        if (args[0] === 'abbandona') {
+            if (!active) {
+                await msg.reply('❌ Non ci sono tornei attivi.');
+                return;
+            }
+            if (active.state === 'signup') {
+                active.participants = active.participants.filter(player => player !== sender);
+                tournaments[active.id] = active;
+                writeJson(FILE, tournaments);
+                await msg.reply('🚪 Hai lasciato la lista iscritti del torneo.');
+                return;
+            }
+
+            const match = active.matches.find(item => !item.winner && (item.player1 === sender || item.player2 === sender));
+            if (!match) {
+                await msg.reply('❌ Non hai match attivi da abbandonare.');
+                return;
+            }
+
+            const opponent = match.player1 === sender ? match.player2 : match.player1;
+            match.winner = opponent;
+            aggiornaClassifica(sender, -15, false, 'torneo', getPlayerName(sender));
+            aggiungiMonete(sender, -15, getPlayerName(sender));
+            await processGameProgress({
+                userId: sender,
+                game: 'torneo',
+                displayName: getPlayerName(sender),
+                events: { plays: 1, losses: 1, profit: -15 }
+            });
+            tournaments[active.id] = active;
+            writeJson(FILE, tournaments);
+            await msg.reply('🏃 Hai abbandonato il torneo. Match assegnato all’avversario.');
+            return;
         }
     }
 };

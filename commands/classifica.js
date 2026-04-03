@@ -1,262 +1,171 @@
 const fs = require('fs');
 const path = require('path');
-const { getSenderId, isAdmin } = require('../utils/identity');
+const { getSenderId, isAdmin, findMatchingKey } = require('../utils/identity');
+
+const GIOCHI = ['slot', 'dado', 'roulette', 'cavalli', 'scelta', 'blackjack', 'pesca', 'duello', 'torneo', 'battaglia', 'trivia'];
+
+function getClassificaFile(gioco) {
+    return path.join(__dirname, '..', 'data', `classifica_${gioco}.json`);
+}
+
+function readJson(filePath, fallback = {}) {
+    try {
+        if (!fs.existsSync(filePath)) return fallback;
+        return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch {
+        return fallback;
+    }
+}
+
+function writeJson(filePath, data) {
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+}
+
+function getDisplayName(userId, explicitName = null) {
+    const nomiFile = path.join(__dirname, '..', 'data', 'nomi_giocatori.json');
+    const nomi = readJson(nomiFile);
+    const matchedKey = findMatchingKey(nomi, userId);
+    return explicitName || (matchedKey ? nomi[matchedKey] : null) || userId.split('@')[0];
+}
+
+function getOrderedStats(classifica) {
+    return Object.values(classifica)
+        .sort((a, b) => {
+            if ((b.soldi || 0) !== (a.soldi || 0)) return (b.soldi || 0) - (a.soldi || 0);
+            if ((b.vittorie || 0) !== (a.vittorie || 0)) return (b.vittorie || 0) - (a.vittorie || 0);
+            return (a.perdite || 0) - (b.perdite || 0);
+        })
+        .slice(0, 10);
+}
+
+function formatLeaderboard(title, entries) {
+    const labels = ['1.', '2.', '3.'];
+    let response = `${title}\n\n`;
+    for (let i = 0; i < entries.length; i++) {
+        const entry = entries[i];
+        const label = labels[i] || `${i + 1}.`;
+        response += `${label} @${entry.id.split('@')[0]} - Soldi: ${entry.soldi || 0}\n`;
+        response += `Vittorie: ${entry.vittorie || 0} | Perdite: ${entry.perdite || 0}\n\n`;
+    }
+    return response.trim();
+}
+
+function resetAllClassifiche() {
+    for (const gioco of GIOCHI) {
+        writeJson(getClassificaFile(gioco), {});
+    }
+}
+
+function aggiornaClassifica(idGiocatore, soldiDelta = 0, vittoria = false, gioco = 'generale', nome = null) {
+    const classificaFile = getClassificaFile(gioco);
+    const classifica = readJson(classificaFile);
+    const existingKey = findMatchingKey(classifica, idGiocatore) || idGiocatore;
+
+    if (!classifica[existingKey]) {
+        classifica[existingKey] = {
+            id: idGiocatore,
+            nome: getDisplayName(idGiocatore, nome),
+            soldi: 0,
+            vittorie: 0,
+            perdite: 0
+        };
+    }
+
+    const entry = classifica[existingKey];
+    entry.id = idGiocatore;
+    entry.nome = getDisplayName(idGiocatore, nome);
+    entry.soldi = (entry.soldi || 0) + soldiDelta;
+
+    if (vittoria) entry.vittorie = (entry.vittorie || 0) + 1;
+    if (!vittoria && soldiDelta < 0) entry.perdite = (entry.perdite || 0) + 1;
+
+    writeJson(classificaFile, classifica);
+    return entry;
+}
 
 module.exports = {
     name: 'classifica',
-    description: 'Mostra classifiche giochi',
+    description: 'Mostra classifiche dei giochi basate sui soldi',
     async execute(msg, client) {
         const args = msg.body.split(' ').slice(1);
-        
-        // Se nessun argomento, mostra classifica totale
+
         if (args.length === 0) {
             await mostraClassificaTotale(msg, client);
             return;
         }
-        
-        const gioco = args[0].toLowerCase();
-        
-        // Classifiche specifiche per gioco
-        if (['slot', 'dado', 'roulette', 'russa', 'cavalli', 'scelta', 'blackjack', 'pesca', 'duello', 'torneo', 'battaglia'].includes(gioco)) {
-            // Converti russa in roulette per il file
-            const nomeFile = gioco === 'russa' ? 'roulette' : gioco;
-            await mostraClassificaGioco(msg, client, nomeFile);
+
+        const gioco = args[0].toLowerCase() === 'russa' ? 'roulette' : args[0].toLowerCase();
+
+        if (GIOCHI.includes(gioco)) {
+            await mostraClassificaGioco(msg, client, gioco);
             return;
         }
-        
-        // Reset classifica totale (solo admin)
+
         if (gioco === 'reset') {
             const sender = await getSenderId(msg);
-            
             if (!isAdmin(sender)) {
-                await msg.reply('❌ Solo l\'admin può cancellare le classifiche!');
+                await msg.reply('Solo l\'admin puo resettare le classifiche.');
                 return;
             }
-            
-            await resetClassificaTotale(msg, client);
+
+            resetAllClassifiche();
+            await msg.reply('Classifiche azzerate.');
             return;
         }
-        
-        await msg.reply("🏆 CLASSIFICHE DISPONIBILI\n\n📊 .classifica - Totale\n🎰 .classifica slot\n🎲 .classifica dado\n🔫 .classifica russa\n🐎 .classifica cavalli\n🎯 .classifica scelta\n🎃 .classifica blackjack\n🎣 .classifica pesca\n⚔️ .classifica duello\n🏆 .classifica torneo\n🏰 .classifica battaglia\n\n🗑️ .classifica reset - Azzera tutto (solo admin)");
-    }
+
+        await msg.reply('Usa .classifica oppure .classifica [gioco].');
+    },
+    aggiornaClassifica,
+    resetAllClassifiche,
+    GIOCHI_CLASSIFICA: GIOCHI
 };
 
 async function mostraClassificaTotale(msg, client) {
-    const giochi = ['slot', 'dado', 'roulette', 'cavalli', 'scelta', 'blackjack', 'pesca', 'duello', 'torneo', 'battaglia'];
-    const classificaTotale = {};
-    
-    // Carica mappatura nomi -> ID
-    const nomiFile = path.join(__dirname, '..', 'data', 'nomi_giocatori.json');
-    let mappaId = {};
-    if (fs.existsSync(nomiFile)) {
-        try {
-            const nomi = JSON.parse(fs.readFileSync(nomiFile, 'utf8'));
-            // Inverti la mappatura: nome -> id
-            for (const [id, nome] of Object.entries(nomi)) {
-                mappaId[nome] = id;
+    const totale = {};
+
+    for (const gioco of GIOCHI) {
+        const classifica = readJson(getClassificaFile(gioco));
+        for (const entry of Object.values(classifica)) {
+            if (!totale[entry.id]) {
+                totale[entry.id] = {
+                    id: entry.id,
+                    nome: entry.nome || entry.id.split('@')[0],
+                    soldi: 0,
+                    vittorie: 0,
+                    perdite: 0
+                };
             }
-        } catch (e) {}
-    }
-    
-    // Somma punti da tutti i giochi
-    for (const gioco of giochi) {
-        const classificaFile = path.join(__dirname, '..', 'data', `classifica_${gioco}.json`);
-        if (fs.existsSync(classificaFile)) {
-            try {
-                const dati = JSON.parse(fs.readFileSync(classificaFile, 'utf8'));
-                for (const [nome, stats] of Object.entries(dati)) {
-                    if (!classificaTotale[nome]) {
-                        classificaTotale[nome] = { punti: 0, vittorie: 0, partite: 0 };
-                    }
-                    classificaTotale[nome].punti += stats.punti || 0;
-                    classificaTotale[nome].vittorie += stats.vittorie || 0;
-                    classificaTotale[nome].partite += stats.partite || 0;
-                }
-            } catch (e) {}
+
+            totale[entry.id].nome = entry.nome || totale[entry.id].nome;
+            totale[entry.id].soldi += entry.soldi || 0;
+            totale[entry.id].vittorie += entry.vittorie || 0;
+            totale[entry.id].perdite += entry.perdite || 0;
         }
     }
-    
-    if (Object.keys(classificaTotale).length === 0) {
-        await msg.reply('🏆 CLASSIFICA TOTALE\n\n📊 Nessun giocatore ancora!\n\n🎮 Gioca ai minigiochi per guadagnare punti!');
+
+    const top = getOrderedStats(totale);
+    if (top.length === 0) {
+        await msg.reply('Nessuna classifica disponibile ancora.');
         return;
     }
-    
-    const giocatoriOrdinati = Object.entries(classificaTotale)
-        .sort(([,a], [,b]) => b.punti - a.punti)
-        .slice(0, 10);
-    
-    let response = '🏆 CLASSIFICA TOTALE 🏆\n\n';
-    const mentions = [];
-    
-    giocatoriOrdinati.forEach(([nome, dati], index) => {
-        const posizione = index + 1;
-        let emoji = posizione <= 3 ? ['🥇', '🥈', '🥉'][posizione - 1] : `${posizione}.`;
-        
-        // Se ho l'ID per questo nome, tagga
-        if (mappaId[nome]) {
-            response += `${emoji} @${mappaId[nome].split('@')[0]}: ${dati.punti} punti\n`;
-            mentions.push(mappaId[nome]);
-        } else {
-            response += `${emoji} ${nome}: ${dati.punti} punti\n`;
-        }
-        response += `   🎯 Vittorie: ${dati.vittorie} | 🎮 Partite: ${dati.partite}\n\n`;
+
+    await client.sendMessage(msg.from, formatLeaderboard('CLASSIFICA TOTALE', top), {
+        mentions: top.map(entry => entry.id)
     });
-    
-    response += '🎮 Usa .classifica [gioco] per classifiche specifiche!';
-    
-    if (mentions.length > 0) {
-        await client.sendMessage(msg.from, response, { mentions });
-    } else {
-        await msg.reply(response);
-    }
 }
 
 async function mostraClassificaGioco(msg, client, gioco) {
-    const classificaFile = path.join(__dirname, '..', 'data', `classifica_${gioco}.json`);
-    
-    // Carica mappatura nomi -> ID
-    const nomiFile = path.join(__dirname, '..', 'data', 'nomi_giocatori.json');
-    let mappaId = {};
-    if (fs.existsSync(nomiFile)) {
-        try {
-            const nomi = JSON.parse(fs.readFileSync(nomiFile, 'utf8'));
-            // Inverti la mappatura: nome -> id
-            for (const [id, nome] of Object.entries(nomi)) {
-                mappaId[nome] = id;
-            }
-        } catch (e) {}
-    }
-    
-    let classifica = {};
-    if (fs.existsSync(classificaFile)) {
-        try {
-            classifica = JSON.parse(fs.readFileSync(classificaFile, 'utf8'));
-        } catch (e) {}
-    }
-    
-    if (Object.keys(classifica).length === 0) {
-        await msg.reply(`🏆 CLASSIFICA ${gioco.toUpperCase()}\n\n📊 Nessun giocatore ancora!\n\n🎮 Gioca per apparire in classifica!`);
+    const classifica = readJson(getClassificaFile(gioco));
+    const top = getOrderedStats(classifica);
+
+    if (top.length === 0) {
+        await msg.reply(`Nessun dato per ${gioco}.`);
         return;
     }
-    
-    const giocatoriOrdinati = Object.entries(classifica)
-        .sort(([,a], [,b]) => b.punti - a.punti)
-        .slice(0, 10);
-    
-    const emojiGioco = {
-        slot: '🎰',
-        dado: '🎲', 
-        carta: '🃏',
-        roulette: '🔫',
-        blackjack: '🎃',
-        pesca: '🎣',
-        cavalli: '🐎',
-        scelta: '🎯',
-        duello: '⚔️',
-        torneo: '🏆',
-        battaglia: '🏰'
-    };
-    
-    let response = `${emojiGioco[gioco]} CLASSIFICA ${gioco.toUpperCase()} ${emojiGioco[gioco]}\n\n`;
-    const mentions = [];
-    
-    giocatoriOrdinati.forEach(([nome, dati], index) => {
-        const posizione = index + 1;
-        let emoji = posizione <= 3 ? ['🥇', '🥈', '🥉'][posizione - 1] : `${posizione}.`;
-        
-        // Se ho l'ID per questo nome, tagga
-        if (mappaId[nome]) {
-            response += `${emoji} @${mappaId[nome].split('@')[0]}: ${dati.punti} punti\n`;
-            mentions.push(mappaId[nome]);
-        } else {
-            response += `${emoji} ${nome}: ${dati.punti} punti\n`;
-        }
-        response += `   🎯 Vittorie: ${dati.vittorie || 0} | 🎮 Partite: ${dati.partite || 0}\n\n`;
+
+    await client.sendMessage(msg.from, formatLeaderboard(`CLASSIFICA ${gioco.toUpperCase()}`, top), {
+        mentions: top.map(entry => entry.id)
     });
-    
-    if (mentions.length > 0) {
-        await client.sendMessage(msg.from, response, { mentions });
-    } else {
-        await msg.reply(response);
-    }
 }
-
-async function resetClassificaTotale(msg, client) {
-    const giochi = ['slot', 'dado', 'roulette', 'cavalli', 'scelta', 'blackjack', 'pesca', 'duello', 'torneo', 'battaglia'];
-    
-    for (const gioco of giochi) {
-        const classificaFile = path.join(__dirname, '..', 'data', `classifica_${gioco}.json`);
-        if (fs.existsSync(classificaFile)) {
-            fs.writeFileSync(classificaFile, JSON.stringify({}, null, 2));
-        }
-    }
-    
-    // Azzera anche il file dei nomi
-    const nomiFile = path.join(__dirname, '..', 'data', 'nomi_giocatori.json');
-    if (fs.existsSync(nomiFile)) {
-        fs.writeFileSync(nomiFile, JSON.stringify({}, null, 2));
-    }
-    
-    await msg.reply("🗑️ Tutte le classifiche azzerate!");
-}
-
-// Funzione helper per aggiornare punti
-function aggiornaClassifica(idGiocatore, puntiVinti, vittoria = false, gioco = 'generale', nome = null) {
-    console.log(`AGGIORNA CLASSIFICA: ${idGiocatore}, punti: ${puntiVinti}, gioco: ${gioco}, nome: ${nome}`);
-    
-    const classificaFile = path.join(__dirname, '..', 'data', `classifica_${gioco}.json`);
-    const dataDir = path.dirname(classificaFile);
-    
-    if (!fs.existsSync(dataDir)) {
-        fs.mkdirSync(dataDir, { recursive: true });
-    }
-    
-    let classifica = {};
-    if (fs.existsSync(classificaFile)) {
-        try {
-            classifica = JSON.parse(fs.readFileSync(classificaFile, 'utf8'));
-        } catch (error) {
-            classifica = {};
-        }
-    }
-    
-    // Usa sempre il nome se fornito, altrimenti l'ID
-    const chiave = nome && nome !== idGiocatore ? nome : idGiocatore;
-    
-    // Rimuovi vecchia entry con ID se esiste una con nome
-    if (nome && nome !== idGiocatore && classifica[idGiocatore]) {
-        if (classifica[chiave]) {
-            // Somma i punti della vecchia entry
-            classifica[chiave].punti += classifica[idGiocatore].punti;
-            classifica[chiave].vittorie += classifica[idGiocatore].vittorie;
-            classifica[chiave].partite += classifica[idGiocatore].partite;
-        } else {
-            // Sposta la vecchia entry
-            classifica[chiave] = classifica[idGiocatore];
-        }
-        delete classifica[idGiocatore];
-    }
-    
-    if (!classifica[chiave]) {
-        classifica[chiave] = {
-            punti: 0,
-            vittorie: 0,
-            partite: 0
-        };
-    }
-    
-    classifica[chiave].punti += puntiVinti;
-    // Non si può scendere sotto 0 punti
-    if (classifica[chiave].punti < 0) {
-        classifica[chiave].punti = 0;
-    }
-    classifica[chiave].partite += 1;
-    if (vittoria) {
-        classifica[chiave].vittorie += 1;
-    }
-    
-    console.log(`Salvato in classifica con chiave: ${chiave}`);
-    fs.writeFileSync(classificaFile, JSON.stringify(classifica, null, 2));
-}
-
-module.exports.aggiornaClassifica = aggiornaClassifica;
