@@ -3,7 +3,8 @@ const qrcode = require('qrcode-terminal');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const fs = require('fs');
 const path = require('path');
-const { getSenderId, findMatchingKey } = require('./utils/identity');
+const { getSenderId, findMatchingKey, isAdmin } = require('./utils/identity');
+const { readConfig: readAdminConfig } = require('./utils/adminConfig');
 
 // Initialize uptime tracking
 const startTime = Date.now();
@@ -132,13 +133,26 @@ client.on('message', async msg => {
     const command = commands.get(commandName);
 
     if (command) {
+        const adminConfig = readAdminConfig();
+        if (!isAdmin(sender)) {
+            if (adminConfig.maintenance && !['help', 'novita', 'ai'].includes(commandName)) {
+                await msg.reply('🛠️ Il bot e in manutenzione in questo momento.\n\n💡 Torna tra poco oppure usa .novita per vedere cosa sta cambiando.');
+                return;
+            }
+
+            if (adminConfig.lockedCommands.includes(commandName)) {
+                await msg.reply(`🔒 Il comando .${commandName} e temporaneamente disattivato dall'admin.`);
+                return;
+            }
+        }
+
         if (isOnCooldown(sender, commandName)) return;
         logComando(sender, commandName);
         try {
             await command.execute(msg, client);
         } catch (error) {
             console.error('Errore comando:', error);
-            msg.reply('Errore nell\'esecuzione del comando.');
+            msg.reply('❌ Si e verificato un errore durante l\'esecuzione del comando.\n\n💡 Riprova tra poco. Se continua, usa .novita o segnala il comando che ha dato problemi.');
         }
     }
 });

@@ -1,0 +1,28 @@
+[
+  {
+    "id": "2026-04-03-pesca-mega-update",
+    "date": "2026-04-03",
+    "title": "Mega update pesca",
+    "emoji": "🎣",
+    "items": [
+      "nuove aree da sbloccare",
+      "nuovi pesci, tesori, canne ed esche",
+      "meteo e marea giornalieri",
+      "boss marini nel weekend",
+      "crafting cucina e mercato nero",
+      "inventario, collezione e vendita rinnovati"
+    ]
+  },
+  {
+    "id": "2026-04-03-missioni-achievement",
+    "date": "2026-04-03",
+    "title": "Missioni e achievement con ricompense",
+    "emoji": "🏆",
+    "items": [
+      "missioni giornaliere pubbliche con .missioni",
+      "achievement che pagano crediti automaticamente",
+      "progressi condivisi tra più giochi",
+      "nuovo comando pubblico .novita"
+    ]
+  }
+]

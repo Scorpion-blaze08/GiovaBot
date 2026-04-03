@@ -1,4 +1,7 @@
 const { aggiornaClassifica } = require('./classifica');
+const { aggiungiMonete } = require('../utils/economia');
+const { getSenderId, isAdmin } = require('../utils/identity');
+const { processGameProgress } = require('../utils/progression');
 const fs = require('fs');
 const path = require('path');
 
@@ -7,14 +10,10 @@ module.exports = {
     description: 'Corsa dei cavalli con scommesse',
     async execute(msg, client) {
         const args = msg.body.split(' ').slice(1);
-        const sender = msg.author || msg.from;
-        
-        // Lista admin
-        const adminIds = ['16209290481885@lid'];
-        const isAdmin = adminIds.includes(sender);
+        const sender = await getSenderId(msg);
         
         // Comando admin - trucca cavallo
-        if (args[0] === 'trucca' && isAdmin) {
+        if (args[0] === 'trucca' && isAdmin(sender)) {
             const numero = parseInt(args[1]);
             if (!numero || numero < 1 || numero > 4) {
                 await msg.reply('❌ Uso: .cavalli trucca [1-4]');
@@ -32,7 +31,7 @@ module.exports = {
         }
         
         // Comando admin - ruba punti
-        if (args[0] === 'ruba' && isAdmin) {
+        if (args[0] === 'ruba' && isAdmin(sender)) {
             const mentions = await msg.getMentions();
             if (!mentions.length || !args[2]) {
                 await msg.reply('❌ Uso: .cavalli ruba @utente [punti]');
@@ -102,14 +101,14 @@ module.exports = {
         const startTime = Date.now();
         const scommesseTimeout = 30000; // 30 secondi
         
-        const messageHandler = (newMsg) => {
+        const messageHandler = async (newMsg) => {
             if (Date.now() - startTime > scommesseTimeout) return;
             
             const body = newMsg.body.toLowerCase();
             if (body.startsWith('cavallo ')) {
                 const numero = parseInt(body.split(' ')[1]);
                 if (numero >= 1 && numero <= 4) {
-                    const sender = newMsg.author || newMsg.from;
+                    const sender = await getSenderId(newMsg);
                     const mioNome = newMsg._data?.notifyName || newMsg.contact?.pushname;
                     
                     // Salva nome se disponibile
@@ -192,17 +191,19 @@ module.exports = {
                 let vincitori = [];
                 let perdenti = [];
                 
-                scommesse.forEach((scommessa, giocatore) => {
+                for (const [giocatore, scommessa] of scommesse.entries()) {
                     const isWin = scommessa.numero === winner.id;
                     
                     if (isWin) {
                         vincitori.push(`@${giocatore.split('@')[0]}`);
                         allMentions.push(giocatore);
-                        aggiornaClassifica(giocatore, 10, true, 'cavalli', scommessa.nome);
+                        aggiornaClassifica(giocatore, 20, true, 'cavalli', scommessa.nome);
+                        aggiungiMonete(giocatore, 20, scommessa.nome);
                     } else {
                         perdenti.push(`@${giocatore.split('@')[0]}`);
                         allMentions.push(giocatore);
-                        aggiornaClassifica(giocatore, -2, false, 'cavalli', scommessa.nome);
+                        aggiornaClassifica(giocatore, -4, false, 'cavalli', scommessa.nome);
+                        aggiungiMonete(giocatore, -4, scommessa.nome);
                     }
                     
                     // Sistema Streak
@@ -220,16 +221,28 @@ module.exports = {
                             }
                         }
                     }
-                });
+
+                    await processGameProgress({
+                        userId: giocatore,
+                        game: 'cavalli',
+                        displayName: scommessa.nome,
+                        events: {
+                            plays: 1,
+                            wins: isWin ? 1 : 0,
+                            losses: isWin ? 0 : 1,
+                            profit: isWin ? 20 : -4
+                        }
+                    });
+                }
                 
                 if (vincitori.length > 0) {
-                    trackDisplay += `🏆 VINCITORI (+10 punti):\n${vincitori.join(', ')}\n\n`;
+                    trackDisplay += `🏆 VINCITORI (+20 crediti):\n${vincitori.join(', ')}\n\n`;
                 }
                 if (perdenti.length > 0) {
-                    trackDisplay += `😔 PERDENTI (-2 punti):\n${perdenti.join(', ')}\n\n`;
+                    trackDisplay += `😔 PERDENTI (-4 crediti):\n${perdenti.join(', ')}\n\n`;
                 }
                 
-                trackDisplay += '📊 Usa .classifica per vedere i punti!';
+                trackDisplay += '📊 Usa .classifica per vedere la classifica soldi!';
             }
             
             // Modifica il messaggio esistente invece di inviarne uno nuovo

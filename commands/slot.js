@@ -1,5 +1,7 @@
 const { aggiornaClassifica } = require('./classifica');
 const { aggiungiMonete } = require('../utils/economia');
+const { getSenderId, isAdmin } = require('../utils/identity');
+const { processGameProgress } = require('../utils/progression');
 const fs = require('fs');
 const path = require('path');
 
@@ -8,14 +10,10 @@ module.exports = {
     description: 'Slot machine',
     async execute(msg) {
         const args = msg.body.split(' ').slice(1);
-        const sender = msg.author || msg.from;
-        
-        // Lista admin
-        const adminIds = ['16209290481885@lid'];
-        const isAdmin = adminIds.includes(sender);
+        const sender = await getSenderId(msg);
         
         // Comando admin - jackpot garantito
-        if (args[0] === 'jackpot' && isAdmin) {
+        if (args[0] === 'jackpot' && isAdmin(sender)) {
             const slot1 = '💎';
             const slot2 = '💎';
             const slot3 = '💎';
@@ -36,7 +34,7 @@ module.exports = {
         }
         
         // Comando admin - ruba punti
-        if (args[0] === 'ruba' && isAdmin) {
+        if (args[0] === 'ruba' && isAdmin(sender)) {
             const mentions = await msg.getMentions();
             if (!mentions.length || !args[2]) {
                 await msg.reply('❌ Uso: .slot ruba @utente [punti]');
@@ -162,8 +160,9 @@ module.exports = {
             message += messaggiPerdita[Math.floor(Math.random() * messaggiPerdita.length)];
         }
         
-        aggiornaClassifica(sender, punti, vittoria, 'slot', userName);
-        if (punti !== 0) aggiungiMonete(sender, punti * 2, userName);
+        const coinDelta = punti * 2;
+        aggiornaClassifica(sender, coinDelta, vittoria, 'slot', userName);
+        if (coinDelta !== 0) aggiungiMonete(sender, coinDelta, userName);
         
         // Sistema Streak
         let streakInfo = null;
@@ -180,43 +179,28 @@ module.exports = {
             }
         }
         
-        message += '\n📈 Usa .classifica per vedere i punti!';
-        
-        // Sistema Achievement
-        if (global.unlockAchievement) {
-            // Primo comando
-            await global.unlockAchievement(sender, 'first_command', msg);
-            
-            // Prima vincita slot
-            if (vittoria && punti > 0) {
-                await global.unlockAchievement(sender, 'slot_first_win', msg);
-            }
-            
-            // Jackpot diamanti
-            if (slot1 === '💎' && slot2 === '💎' && slot3 === '💎') {
-                await global.unlockAchievement(sender, 'slot_jackpot', msg);
-            }
-            
-            // Tre sette
-            if (slot1 === '7️⃣' && slot2 === '7️⃣' && slot3 === '7️⃣') {
-                await global.unlockAchievement(sender, 'slot_lucky_7', msg);
-            }
-            
-            // Due ciliegie
-            if ((slot1 === '🍒' && slot2 === '🍒') || (slot2 === '🍒' && slot3 === '🍒') || (slot1 === '🍒' && slot3 === '🍒')) {
-                await global.unlockAchievement(sender, 'slot_cherry_lover', msg);
-            }
-            
-            // High roller (vincita alta)
-            if (punti >= 30) {
-                await global.unlockAchievement(sender, 'slot_high_roller', msg);
-            }
-            
-            // Achievement streak
-            if (streakInfo && streakInfo.current >= 5) {
-                await global.unlockAchievement(sender, 'slot_streak_5', msg);
-            }
-        }
+        await processGameProgress({
+            userId: sender,
+            game: 'slot',
+            displayName: userName,
+            msg,
+            events: {
+                plays: 1,
+                wins: vittoria ? 1 : 0,
+                losses: vittoria ? 0 : 1,
+                profit: coinDelta
+            },
+            flags: [
+                slot1 === '💎' && slot2 === '💎' && slot3 === '💎' ? 'slot_jackpot' : null,
+                slot1 === '7️⃣' && slot2 === '7️⃣' && slot3 === '7️⃣' ? 'slot_lucky_7' : null,
+                punti >= 30 ? 'slot_high_roller' : null,
+                ((slot1 === '🍒' && slot2 === '🍒') || (slot2 === '🍒' && slot3 === '🍒') || (slot1 === '🍒' && slot3 === '🍒')) ? 'slot_cherry_lover' : null
+            ].filter(Boolean),
+            streak: streakInfo ? streakInfo.current : 0
+        });
+
+        message += `\n💰 Variazione crediti: ${coinDelta >= 0 ? '+' : ''}${coinDelta}`;
+        message += '\n📈 Usa .classifica per vedere la classifica soldi!';
         
         await msg.reply(message);
     }

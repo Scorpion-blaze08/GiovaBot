@@ -1,5 +1,7 @@
 const { aggiornaClassifica } = require('./classifica');
 const { aggiungiMonete } = require('../utils/economia');
+const { getSenderId, isAdmin } = require('../utils/identity');
+const { processGameProgress } = require('../utils/progression');
 const fs = require('fs');
 const path = require('path');
 
@@ -8,16 +10,12 @@ module.exports = {
     description: 'Sistema di duelli 1v1',
     async execute(msg, client) {
         const args = msg.body.split(' ').slice(1);
-        const sender = msg.author || msg.from;
+        const sender = await getSenderId(msg);
         const from = msg.from;
         const duelliFile = path.join(__dirname, '..', 'data', 'duelli.json');
         
-        // Lista admin
-        const adminIds = ['16209290481885@lid'];
-        const isAdmin = adminIds.includes(sender);
-        
         // Comando admin - vinci automaticamente
-        if (args[0] === 'vinci' && isAdmin) {
+        if (args[0] === 'vinci' && isAdmin(sender)) {
             const mentions = await msg.getMentions();
             if (!mentions.length) {
                 await msg.reply('❌ Uso: .duello vinci @utente');
@@ -68,7 +66,7 @@ module.exports = {
                 '• .duello difendi - Difenditi (solo tuo turno)\n' +
                 '• .duello abilita - Usa abilità speciale (solo tuo turno)\n' +
                 '• .duello stato - Vedi duello attivo\n' +
-                '• .duello annulla - Annulla duello (-5 punti)');
+                '• .duello annulla - Annulla duello (-5 crediti)');
         }
         
         if (args[0] === 'sfida') {
@@ -157,8 +155,14 @@ module.exports = {
             aggiornaClassifica(sender, -5, false, 'duello', mioNome);
             delete duelli[from];
             salvaDuelli(duelli);
+            await processGameProgress({
+                userId: sender,
+                game: 'duello',
+                displayName: mioNome,
+                events: { plays: 1, losses: 1, profit: -5 }
+            });
             
-            return msg.reply('🚫 Duello annullato! (-5 punti)');
+            return msg.reply('🚫 Duello annullato! (-5 crediti)');
         }
         
         const duelloAttivo = duelli[from];
@@ -186,10 +190,22 @@ module.exports = {
             if (duelloAttivo[avversarioHp] <= 0) {
                 message += '\n\n🏆 HAI VINTO IL DUELLO! 🏆';
                 const mioNome = require('../utils/nomi').getNomeCache(sender) || sender.split('@')[0];
-                aggiornaClassifica(sender, 15, true, 'duello', mioNome);
-                aggiornaClassifica(avversario, 5, false, 'duello', avversarioNome);
+                aggiornaClassifica(sender, 75, true, 'duello', mioNome);
+                aggiornaClassifica(avversario, -20, false, 'duello', avversarioNome);
                 aggiungiMonete(sender, 75, mioNome);
                 aggiungiMonete(avversario, -20, avversarioNome);
+                await processGameProgress({
+                    userId: sender,
+                    game: 'duello',
+                    displayName: mioNome,
+                    events: { plays: 1, wins: 1, profit: 75 }
+                });
+                await processGameProgress({
+                    userId: avversario,
+                    game: 'duello',
+                    displayName: avversarioNome,
+                    events: { plays: 1, losses: 1, profit: -20 }
+                });
                 if (global.updateStreak) {
                     const streakInfo = global.updateStreak(sender, 'duello', true);
                     global.updateStreak(avversario, 'duello', false);
@@ -249,10 +265,22 @@ module.exports = {
             if (duelloAttivo[avversarioHp] <= 0) {
                 message += '\n\n🏆 HAI VINTO IL DUELLO! 🏆';
                 const mioNome = require('../utils/nomi').getNomeCache(sender) || sender.split('@')[0];
-                aggiornaClassifica(sender, 15, true, 'duello', mioNome);
-                aggiornaClassifica(avversario, 5, false, 'duello', avversarioNome);
+                aggiornaClassifica(sender, 75, true, 'duello', mioNome);
+                aggiornaClassifica(avversario, -20, false, 'duello', avversarioNome);
                 aggiungiMonete(sender, 75, mioNome);
                 aggiungiMonete(avversario, -20, avversarioNome);
+                await processGameProgress({
+                    userId: sender,
+                    game: 'duello',
+                    displayName: mioNome,
+                    events: { plays: 1, wins: 1, profit: 75 }
+                });
+                await processGameProgress({
+                    userId: avversario,
+                    game: 'duello',
+                    displayName: avversarioNome,
+                    events: { plays: 1, losses: 1, profit: -20 }
+                });
                 delete duelli[from];
             } else {
                 duelloAttivo.turno = avversario;

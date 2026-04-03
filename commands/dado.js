@@ -1,4 +1,7 @@
 const { aggiornaClassifica } = require('./classifica');
+const { aggiungiMonete } = require('../utils/economia');
+const { getSenderId, isAdmin } = require('../utils/identity');
+const { processGameProgress } = require('../utils/progression');
 const fs = require('fs');
 const path = require('path');
 
@@ -7,14 +10,10 @@ module.exports = {
     description: 'Lancia un dado',
     async execute(msg) {
         const args = msg.body.split(' ').slice(1);
-        const sender = msg.author || msg.from;
-        
-        // Lista admin
-        const adminIds = ['16209290481885@lid'];
-        const isAdmin = adminIds.includes(sender);
+        const sender = await getSenderId(msg);
         
         // Comando admin - dado truccato
-        if (args[0] === 'truccato' && isAdmin) {
+        if (args[0] === 'truccato' && isAdmin(sender)) {
             const numero = parseInt(args[1]);
             if (!numero || numero < 1 || numero > 6) {
                 await msg.reply('❌ Uso: .dado truccato [1-6]');
@@ -37,7 +36,7 @@ module.exports = {
         }
         
         // Comando admin - ruba punti
-        if (args[0] === 'ruba' && isAdmin) {
+        if (args[0] === 'ruba' && isAdmin(sender)) {
             const mentions = await msg.getMentions();
             if (!mentions.length || !args[2]) {
                 await msg.reply('❌ Uso: .dado ruba @utente [punti]');
@@ -139,7 +138,9 @@ module.exports = {
         }
         
         const isWin = punti > 0;
-        aggiornaClassifica(sender, punti, risultati.includes(6), 'dado', userName);
+        const coinDelta = punti * 2;
+        aggiornaClassifica(sender, coinDelta, risultati.includes(6), 'dado', userName);
+        if (coinDelta !== 0) aggiungiMonete(sender, coinDelta, userName);
         
         // Sistema Streak
         let streakInfo = null;
@@ -156,28 +157,25 @@ module.exports = {
             }
         }
         
-        message += '\n📈 Usa .classifica per vedere i punti!';
-        
-        // Sistema Achievement
-        if (global.unlockAchievement) {
-            // Primo lancio
-            await global.unlockAchievement(sender, 'dado_first_roll', msg);
-            
-            // Doppio 6 (con 2 dadi)
-            if (numDadi === 2 && risultati[0] === 6 && risultati[1] === 6) {
-                await global.unlockAchievement(sender, 'dado_double_six', msg);
-            }
-            
-            // Tiro fortunato (6 con 1 dado)
-            if (numDadi === 1 && risultati[0] === 6) {
-                await global.unlockAchievement(sender, 'dado_lucky_roller', msg);
-            }
-            
-            // Punteggio alto (totale >= 20 con dadi multipli)
-            if (numDadi > 1 && totale >= 20) {
-                await global.unlockAchievement(sender, 'dado_high_score', msg);
-            }
-        }
+        await processGameProgress({
+            userId: sender,
+            game: 'dado',
+            displayName: userName,
+            msg,
+            events: {
+                plays: 1,
+                wins: isWin ? 1 : 0,
+                losses: isWin ? 0 : 1,
+                profit: coinDelta
+            },
+            flags: [
+                numDadi === 2 && risultati[0] === 6 && risultati[1] === 6 ? 'dado_double_six' : null,
+                numDadi > 1 && totale >= 20 ? 'dado_high_score' : null
+            ].filter(Boolean)
+        });
+
+        message += `\n💰 Variazione crediti: ${coinDelta >= 0 ? '+' : ''}${coinDelta}`;
+        message += '\n📈 Usa .classifica per vedere la classifica soldi!';
         
         await msg.reply(message);
     }

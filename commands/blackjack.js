@@ -1,5 +1,7 @@
 const { aggiornaClassifica } = require('./classifica');
 const { aggiungiMonete } = require('../utils/economia');
+const { getSenderId, isAdmin } = require('../utils/identity');
+const { processGameProgress } = require('../utils/progression');
 const fs = require('fs');
 const path = require('path');
 
@@ -8,15 +10,11 @@ module.exports = {
     description: 'Gioca a Blackjack contro il banco',
     async execute(msg) {
         const args = msg.body.split(' ').slice(1);
-        const sender = msg.author || msg.from;
+        const sender = await getSenderId(msg);
         const partiteFile = path.join(__dirname, '..', 'data', 'partite_blackjack.json');
         
-        // Lista admin
-        const adminIds = ['16209290481885@lid'];
-        const isAdmin = adminIds.includes(sender);
-        
         // Comando admin - 21 garantito
-        if (args[0] === '21' && isAdmin) {
+        if (args[0] === '21' && isAdmin(sender)) {
             const carte21 = [
                 { valore: 'A', seme: '♠️' },
                 { valore: 'K', seme: '♥️' }
@@ -35,7 +33,7 @@ module.exports = {
         }
         
         // Comando admin - ruba punti
-        if (args[0] === 'ruba' && isAdmin) {
+        if (args[0] === 'ruba' && isAdmin(sender)) {
             const mentions = await msg.getMentions();
             if (!mentions.length || !args[2]) {
                 await msg.reply('❌ Uso: .blackjack ruba @utente [punti]');
@@ -165,8 +163,17 @@ module.exports = {
             message += `🏦 Banco: ${mostraCarte(banco, true)}\n\n`;
             
             if (puntiGiocatore === 21) {
-                message += '🎉 BLACKJACK! Hai vinto!\n+15 punti!';
-                aggiornaClassifica(sender, 15, true, 'blackjack', userName);
+                message += '🎉 BLACKJACK! Hai vinto!\n💰 +45 crediti!';
+                aggiornaClassifica(sender, 45, true, 'blackjack', userName);
+                aggiungiMonete(sender, 45, userName);
+                await processGameProgress({
+                    userId: sender,
+                    game: 'blackjack',
+                    displayName: userName,
+                    msg,
+                    events: { plays: 1, wins: 1, profit: 45 },
+                    flags: ['bj_blackjack']
+                });
                 delete partite[sender];
                 salvaPartite(partite);
             } else {
@@ -192,8 +199,16 @@ module.exports = {
             message += `🏦 Banco: ${mostraCarte(partita.banco, true)}\n\n`;
             
             if (puntiGiocatore > 21) {
-                message += '💥 SBALLATO! Hai perso!\n-5 punti';
-                aggiornaClassifica(sender, -5, false, 'blackjack', userName);
+                message += '💥 SBALLATO! Hai perso!\n💸 -15 crediti';
+                aggiornaClassifica(sender, -15, false, 'blackjack', userName);
+                aggiungiMonete(sender, -15, userName);
+                await processGameProgress({
+                    userId: sender,
+                    game: 'blackjack',
+                    displayName: userName,
+                    msg,
+                    events: { plays: 1, losses: 1, profit: -15 }
+                });
                 delete partite[sender];
             } else if (puntiGiocatore === 21) {
                 message += '🎯 21! Perfetto!\n🛑 .blackjack stai - Resta';
@@ -240,8 +255,9 @@ module.exports = {
                 punti = -3;
             }
             
-            aggiornaClassifica(sender, punti, vittoria, 'blackjack', userName);
-            aggiungiMonete(sender, punti * 3, userName);
+            const coinDelta = punti * 3;
+            aggiornaClassifica(sender, coinDelta, vittoria, 'blackjack', userName);
+            aggiungiMonete(sender, coinDelta, userName);
             
             // Sistema Streak
             let streakInfo = null;
@@ -261,6 +277,22 @@ module.exports = {
             delete partite[sender];
             salvaPartite(partite);
             
+            await processGameProgress({
+                userId: sender,
+                game: 'blackjack',
+                displayName: userName,
+                msg,
+                events: {
+                    plays: 1,
+                    wins: vittoria ? 1 : 0,
+                    losses: vittoria ? 0 : (punti < 0 ? 1 : 0),
+                    profit: coinDelta
+                },
+                flags: [puntiGiocatore === 21 ? 'bj_blackjack' : null].filter(Boolean),
+                streak: streakInfo ? streakInfo.current : 0
+            });
+
+            message += `\n💰 Variazione crediti: ${coinDelta >= 0 ? '+' : ''}${coinDelta}`;
             message += '\n\n🎮 Usa .blackjack per giocare ancora!';
             await msg.reply(message);
             return;

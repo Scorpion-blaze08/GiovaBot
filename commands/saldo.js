@@ -1,40 +1,45 @@
 const { getSaldo, getClassificaRicchezza } = require('../utils/economia');
 const { getNomeCache } = require('../utils/nomi');
-
-async function getSenderId(msg) {
-    try {
-        const contact = await msg.getContact();
-        return contact.id._serialized;
-    } catch {
-        return msg.author || msg.from;
-    }
-}
+const { getSenderId } = require('../utils/identity');
 
 module.exports = {
     name: 'saldo',
-    description: 'Vedi le tue GiovaCoins',
+    description: 'Vedi saldo e classifica ricchezza',
     async execute(msg) {
         const sender = await getSenderId(msg);
-        const args = msg.body.split(' ').slice(1);
+        const args = msg.body.trim().split(/\s+/).slice(1);
         const nome = getNomeCache(sender) || sender.split('@')[0];
 
         if (args[0] === 'top' || args[0] === 'classifica') {
             const top = getClassificaRicchezza(10);
-            if (top.length === 0) {
-                await msg.reply('🪙 Nessuno ha ancora GiovaCoins!');
+            if (!top.length) {
+                await msg.reply('🏦 Nessuna classifica ricchezza disponibile per ora.');
                 return;
             }
+
             const medals = ['🥇', '🥈', '🥉'];
-            let resp = '🏦 CLASSIFICA RICCHEZZA 🏦\n\n';
-            top.forEach((p, i) => {
-                resp += `${medals[i] || `${i + 1}.`} ${p.nome}: 🪙 ${p.saldo}\n`;
+            const lines = ['🏦 CLASSIFICA RICCHEZZA 🏦', ''];
+            top.forEach((player, index) => {
+                lines.push(`${medals[index] || `${index + 1}.`} ${player.nome} — 🪙 ${player.saldo}`);
             });
-            resp += '\n💡 Usa .daily per guadagnare ogni giorno!';
-            await msg.reply(resp);
+            lines.push('');
+            lines.push('💡 Usa .daily ogni giorno e .banca per far crescere il saldo.');
+            await msg.reply(lines.join('\n'));
             return;
         }
 
         const saldo = getSaldo(sender);
-        await msg.reply(`🪙 SALDO DI ${nome.toUpperCase()}\n\n💰 ${saldo} GiovaCoins\n\n💡 Comandi:\n• .daily — bonus giornaliero\n• .regala @utente [importo]\n• .saldo top — classifica ricchezza\n• .scommessa @utente [importo]`);
+        await msg.reply([
+            `🪙 SALDO DI ${nome.toUpperCase()} 🪙`,
+            '',
+            `💰 Crediti disponibili: ${saldo}`,
+            '',
+            'Comandi utili:',
+            '• .daily',
+            '• .saldo top',
+            '• .regala @utente importo',
+            '• .banca',
+            '• .missioni'
+        ].join('\n'));
     }
 };
